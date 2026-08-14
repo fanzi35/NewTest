@@ -16,11 +16,26 @@ import os
 import time
 
 # === 配置 ===
-DATA_DIR = 'docs/reference_formats'
+# =========================
+# 路径配置
+# 输入数据:
+#   data/raw/distances.csv
+#   data/raw/peopleQ1.csv
+#
+# 输出结果:
+#   docs/reference_formats/q1-routes.csv
+#   docs/reference_formats/q1-assignments.csv
+# =========================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+DATA_DIR = os.path.join(BASE_DIR, 'data', 'raw')
+OUTPUT_DIR = os.path.join(BASE_DIR, 'docs', 'reference_formats')
+
 DIST_PATH = os.path.join(DATA_DIR, 'distances.csv')
 DEMAND_PATH = os.path.join(DATA_DIR, 'peopleQ1.csv')
-OUT_ROUTES = os.path.join(DATA_DIR, 'q1-routes.csv')
-OUT_ASSIGN = os.path.join(DATA_DIR, 'q1-assignments.csv')
+
+OUT_ROUTES = os.path.join(OUTPUT_DIR, 'q1-routes.csv')
+OUT_ASSIGN = os.path.join(OUTPUT_DIR, 'q1-assignments.csv')
 
 AIRPORTS = ['A01', 'A02', 'A03']
 GAS_STATIONS = {'F006', 'F011', 'F018', 'F024', 'F031', 'F038', 'F044', 'F050'}

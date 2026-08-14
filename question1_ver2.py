@@ -49,6 +49,26 @@ from functools import lru_cache
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 
+# =========================
+# 路径配置
+# 输入数据:
+#   data/raw/distances.csv
+#   data/raw/peopleQ1.csv
+#
+# 输出结果:
+#   docs/reference_formats/q1-routes.csv
+#   docs/reference_formats/q1-assignments.csv
+# =========================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data", "raw")
+OUTPUT_DIR = os.path.join(BASE_DIR, "docs", "reference_formats")
+
+DIST_PATH = os.path.join(DATA_DIR, "distances.csv")
+DEMAND_PATH = os.path.join(DATA_DIR, "peopleQ1.csv")
+OUT_ROUTES = os.path.join(OUTPUT_DIR, "q1-routes.csv")
+OUT_ASSIGN = os.path.join(OUTPUT_DIR, "q1-assignments.csv")
+
+
 # ============================================================
 # 常量
 # ============================================================
@@ -1065,11 +1085,11 @@ def write_output(sorties: Sequence[Sortie], routes_path: str, assign_path: str) 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Q1 单向出海运输优化 question1_ver2")
-    p.add_argument("--data-dir", default="docs/reference_formats", help="输入/输出 CSV 所在目录")
+    p.add_argument("--data-dir", default="data/raw", help="输入/输出 CSV 所在目录")
     p.add_argument("--dist", default=None, help="distances.csv 路径；默认 data-dir/distances.csv")
     p.add_argument("--demand", default=None, help="peopleQ1.csv 路径；默认 data-dir/peopleQ1.csv")
-    p.add_argument("--routes-out", default=None, help="q1-routes.csv 输出路径")
-    p.add_argument("--assign-out", default=None, help="q1-assignments.csv 输出路径")
+    p.add_argument("--routes-out",default=os.path.join(BASE_DIR,"docs","reference_formats","q1-routes.csv"))
+    p.add_argument("--assign-out",default=os.path.join(BASE_DIR,"docs","reference_formats","q1-assignments.csv"))
     return p.parse_args()
 
 
