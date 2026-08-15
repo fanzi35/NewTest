@@ -1,56 +1,3 @@
-"""
-Q1: 单向出海运输 — question1_ver6
-==================================
-目标采用字典序：
-1) 最小化总飞机使用时间；
-2) 只有总飞机使用时间相同时，才降低人员总在途时间；
-3) 再降低总燃油消耗；
-4) 再提高座位利用率。
-
-Q1 的关键特征：
-- 仅有“出海”需求，人员均在架次起飞机场登机，在各自目的设施下机；
-- LAND 可由算法在 A01/A02/A03 中自动选择；若 origin_id 是具体机场，则必须从该机场出发；
-- 一个架次从机场出发，最多 5 次海上着陆，最后返回同一机场；
-- 途中可在 8 个指定设施加油，加油时加满；
-- 所有人在同一架次内不换乘。
-
-算法：
-Stage 1  同一目的设施的精确小规模打包：
-         - 允许 LAND 与固定机场人员拼载；
-         - 用动态规划选择每个机场上的批量/机型组合；
-         - LAND 在三个机场间做枚举分配，主目标按总飞机使用时间比较。
-Stage 2  基于“节约”的聚合合并，快速构造高质量初解：
-         - 对任意可合并的两个架次重新全局优化机场、机型、交付顺序和加油决策；
-         - 使用堆维护候选，不再用固定 150 km 阈值硬剪枝；
-         - 合并后只更新与新架次有关的候选，避免每轮 O(n^2) 重扫。
-
-路线优化：
-- 对一个候选架次（人数 <= 19、不同交付设施 <= 5），DFS 穷举最多 5 次海上着陆内的
-  “下一交付设施 / 必要的加油设施”组合；
-- 到达加油设施时显式比较“加油/不加油”，因此可以处理“当前下一段能飞，但为了后续航段
-  必须提前加油”的情况；
-- 每个完整路线按 (飞机使用时间, 人员在途时间, 燃油, -座位利用率) 严格字典序选优。
-
-Stage 3  可逆二架次大邻域重划分：
-         - 同时拆开两条现有架次并重新分配其全部人员；
-         - 重新联合优化机场、机型、访问顺序和加油，不受早期贪心合并锁定；
-         - 每次只接受完整解在严格字典序上确实更优的替换。
-
-Stage 4  受控三架次到二架次重组：
-         - 从二架次邻接关系生成少量候选三元组；
-         - 用聚合需求 Beam Search 重分配人员，并复用单架次精确优化器；
-         - 仅接受完整全局指标严格改善的 3→2 替换。
-
-Stage 5  再次执行 Merge 与小规模二架次重划分，清理新出现的局部机会。
-
-ver6 在上述生成器之上维护聚合 Route Pool，并用 Restricted Set Partitioning
-Master 做全局重组；随后依次搜索 4→3、3→3 与 4~6 路线 destroy-repair。
-默认进入无限时 adaptive anytime 模式，直到用户 Ctrl+C；任何时刻只保存已经
-恢复真实人员、重新模拟并通过 validator 的最好合法解。
-
-默认数据路径与 ver1 保持一致，也可通过命令行参数覆盖：
-python -B question1_ver6.py --data-dir data/raw
-"""
 
 from __future__ import annotations
 
@@ -67,19 +14,11 @@ from itertools import combinations
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 
-# =========================
-# 路径配置
-# 输入数据:
-#   data/raw/distances.csv
-#   data/raw/peopleQ1.csv
-#
-# 输出结果:
-#   docs/reference_formats/q1-routes.csv
-#   docs/reference_formats/q1-assignments.csv
-# =========================
+# 配置
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data", "raw")
 OUTPUT_DIR = os.path.join(BASE_DIR, "docs", "reference_formats")
+FIGURE_DIR = os.path.join(BASE_DIR, "outputs", "figures")
 
 DIST_PATH = os.path.join(DATA_DIR, "distances.csv")
 DEMAND_PATH = os.path.join(DATA_DIR, "peopleQ1.csv")
@@ -87,9 +26,7 @@ OUT_ROUTES = os.path.join(OUTPUT_DIR, "q1-routes.csv")
 OUT_ASSIGN = os.path.join(OUTPUT_DIR, "q1-assignments.csv")
 
 
-# ============================================================
 # 常量
-# ============================================================
 
 AIRPORTS = ("A01", "A02", "A03")
 GAS_STATIONS = ("F006", "F011", "F018", "F024", "F031", "F038", "F044", "F050")
@@ -105,13 +42,10 @@ MAX_LANDINGS = 5
 MAX_SEATS = max(v["seats"] for v in AC.values())
 EPS = 1e-9
 
-# 距离矩阵，load_distances() 后填充
 D: Dict[str, Dict[str, float]] = {}
 
 
-# ============================================================
 # 数据结构
-# ============================================================
 
 @dataclass(frozen=True)
 class RouteTemplate:
@@ -167,12 +101,9 @@ class AggregateMetrics:
         return self.pass_km / self.avail_km
 
 
-# ============================================================
 # 基础工具
-# ============================================================
 
 def flight_min(dist_km: float, aircraft_type: str) -> int:
-    """单航段飞行分钟数，向上取整。"""
     return math.ceil(60.0 * dist_km / AC[aircraft_type]["speed"] - EPS)
 
 
@@ -202,11 +133,7 @@ def aggregate_sorties(sorties: Iterable[Sortie]) -> AggregateMetrics:
 
 
 def lex_better(a: AggregateMetrics, b: Optional[AggregateMetrics]) -> bool:
-    """
-    a 是否按字典序优于 b：
-    严格分层：time -> intransit -> fuel -> -seat_util。
-    后一层永远不能补偿前一层的任何恶化。
-    """
+    """按总时间、在途时间、燃油和全局座位利用率依次比较方案。"""
     if b is None:
         return True
     if a.time_min != b.time_min:
@@ -221,7 +148,6 @@ def lex_better(a: AggregateMetrics, b: Optional[AggregateMetrics]) -> bool:
 
 
 def route_key(t: RouteTemplate) -> Tuple:
-    """用于稳定排序；前四项对应字典序目标，后面仅做确定性 tie-break。"""
     return (
         t.time_min,
         t.intransit_min,
@@ -246,14 +172,12 @@ def demand_signature(demands: Sequence[dict]) -> Tuple[Tuple[str, int], ...]:
 
 
 def aggregate_coverage(demands: Sequence[dict]) -> Tuple[Tuple[str, str, int], ...]:
-    """路线列覆盖的聚合需求，不包含具体 person_id。"""
     counts = Counter((d["origin"], d["dest"]) for d in demands)
     return tuple(sorted((origin, dest, count) for (origin, dest), count in counts.items()))
 
 
 @dataclass(frozen=True)
 class RouteColumn:
-    """Restricted Master 使用的可重复聚合路线模式。"""
     coverage: Tuple[Tuple[str, str, int], ...]
     airport: str
     aircraft_type: str
@@ -295,7 +219,6 @@ def route_column_from_sortie(sortie: Sortie) -> RouteColumn:
 
 
 def _column_dominates(a: RouteColumn, b: RouteColumn) -> bool:
-    """相同 coverage 下，a 是否在五个可加指标上 Pareto 支配 b。"""
     no_worse = (
         a.time_min <= b.time_min
         and a.intransit_min <= b.intransit_min
@@ -314,7 +237,7 @@ def _column_dominates(a: RouteColumn, b: RouteColumn) -> bool:
 
 
 class RoutePool:
-    """按聚合需求覆盖保存去重后的非支配路线列。"""
+    """保存去重后的非支配路线列。"""
 
     def __init__(self, max_columns: int = 30000, max_per_coverage: int = 12) -> None:
         self.max_columns = max(1, max_columns)
@@ -386,7 +309,6 @@ class RoutePool:
         self._by_coverage[coverage] = [s for s in ranked if s in keep]
 
     def _trim_global(self) -> None:
-        # 固定上限；当前可行解的列会在 Restricted Master 选列时单独强制加入。
         def global_rank(sig: Tuple) -> Tuple:
             c = self._columns[sig]
             pax = sum(count for _, _, count in c.coverage)
@@ -432,7 +354,6 @@ class MasterResult:
 
 
 class ProgressReporter:
-    """仅向控制台输出 anytime 状态，不写日志文件。"""
 
     def __init__(self, pool: RoutePool, start_time: float, interval: float = 7.0) -> None:
         self.pool = pool
@@ -448,9 +369,24 @@ class ProgressReporter:
         self.last_master_incumbent = "none"
         self.stagnation_rounds = 0
         self.level = 0
+        self.solution_history: List[dict] = []
+        self.status_history: List[dict] = []
 
     def set_best(self, sorties: Sequence[Sortie]) -> None:
         self.best_valid_solution = list(sorties)
+
+    def record_solution(self, source: str, sorties: Sequence[Sortie], is_best: bool) -> None:
+        if not is_best:
+            return
+        stats = compute_stats(sorties)
+        self.solution_history.append({
+            "wall_sec": time.time() - self.start_time,
+            "source": source,
+            "is_best": is_best,
+            **stats,
+        })
+        if len(self.solution_history) > 20000:
+            self.solution_history = self.solution_history[::2]
 
     def note_neighborhood(self, count: int = 1) -> None:
         self.neighborhoods_checked += count
@@ -481,6 +417,16 @@ class ProgressReporter:
                 f"best_util={best['seat_util']:.6f}, "
                 f"best_sorties={best['total_sorties']}"
             )
+        self.status_history.append({
+            "wall_sec": now - self.start_time,
+            "pool_generated": self.pool.total_generated,
+            "pool_nondominated": len(self.pool),
+            "neighborhoods_checked": self.neighborhoods_checked,
+            "stagnation_rounds": self.stagnation_rounds,
+            "level": self.level,
+        })
+        if len(self.status_history) > 20000:
+            self.status_history = self.status_history[::2]
         print(
             f"  [STATUS] wall={now - self.start_time:.1f}s, {best_text}, "
             f"pool_generated={self.pool.total_generated}, "
@@ -508,7 +454,6 @@ def _select_master_columns(
     max_columns: int,
     portfolio_round: int = 0,
 ) -> Tuple[RouteColumn, ...]:
-    """构造含已知可行基的多来源 Restricted Master 列子集。"""
     incumbent_columns = [route_column_from_sortie(s) for s in incumbent_sorties]
     by_signature = {c.signature: c for c in pool.columns()}
     for column in incumbent_columns:
@@ -587,15 +532,7 @@ def solve_restricted_master(
     dinkelbach_tol: float = 1e-8,
     dinkelbach_max_iter: int = 8,
 ) -> MasterResult:
-    """
-    在当前路线池上按四级字典序求解聚合集合划分。
-
-    只有全部路线池列都进入本次 Master 时，才能声称在 current Route Pool 内最优；
-    否则只能声称在 currently selected Restricted Master subset 内最优。
-    任何结果都不能解释为 Q1 global optimum。每次 MILP 调用都有独立短时限；
-    前一级未证最优时不继续优化后一级，避免破坏严格字典序。
-    """
-    # 当前机器可能同时运行训练任务；限制本求解器线程，避免 HiGHS/BLAS 过度争用。
+    """在选定路线列上按四级字典序求解受限集合划分模型。"""
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
     os.environ.setdefault("MKL_NUM_THREADS", "1")
@@ -797,7 +734,7 @@ def solve_restricted_master(
     fuel_opt = int(round(float(fuel_obj @ x)))
     fixed.append(LinearConstraint(fuel_obj[None, :], fuel_opt, fuel_opt))
 
-    # Dinkelbach：最大化 Σ(P-λA)x，SciPy milp 采用最小化，故目标取负。
+    # Dinkelbach：将分式利用率目标转为迭代线性目标。
     best_x = x.copy()
     best_ratio = float(pass_obj @ x) / max(float(avail_obj @ x), EPS)
     fourth_optimal = False
@@ -859,7 +796,6 @@ def solve_restricted_master(
 
 
 def recover_master_solution(result: MasterResult, demands: Sequence[dict]) -> List[Sortie]:
-    """按聚合覆盖恢复真实人员，并用独立模拟结果覆盖路线池缓存指标。"""
     buckets: Dict[Tuple[str, str], List[dict]] = defaultdict(list)
     for demand in sorted(demands, key=lambda d: d["pid"]):
         buckets[(demand["origin"], demand["dest"])].append(demand)
@@ -911,7 +847,6 @@ def solve_master_portfolio(
     per_call_time: float,
     retries: int,
 ) -> Tuple[List[Sortie], List[MasterResult], int]:
-    """使用不同列子集重复求解 Restricted Master，并保留严格字典序最好合法解。"""
     best = list(incumbent_sorties)
     best_metrics = aggregate_sorties(best)
     results = []
@@ -969,9 +904,7 @@ def template_to_sortie(t: RouteTemplate, demands: Sequence[dict]) -> Sortie:
     )
 
 
-# ============================================================
-# 数据加载与输入校验
-# ============================================================
+# 数据读取与校验
 
 def load_distances(path: str) -> None:
     global D
@@ -989,7 +922,6 @@ def load_distances(path: str) -> None:
                 raw = row[j + 1].strip()
                 D[u][v] = float(raw)
 
-    # 基本完整性检查
     nodes = set(D)
     if not set(AIRPORTS).issubset(nodes):
         raise ValueError("distances.csv 缺少 A01/A02/A03 中的机场行")
@@ -1034,13 +966,9 @@ def validate_q1_demands(demands: Sequence[dict]) -> None:
             )
 
 
-# ============================================================
 # 单架次路线优化
-# ============================================================
 
-# 缓存：key=(airport, type, dest_signature)
 _ROUTE_CACHE: Dict[Tuple[str, str, Tuple[Tuple[str, int], ...]], Optional[RouteTemplate]] = {}
-# 缓存：key=(fixed_airport_or_None, dest_signature)
 _TEMPLATE_CACHE: Dict[Tuple[Optional[str], Tuple[Tuple[str, int], ...]], Optional[RouteTemplate]] = {}
 
 
@@ -1049,15 +977,7 @@ def _search_route_for_aircraft(
     aircraft_type: str,
     dest_sig: Tuple[Tuple[str, int], ...],
 ) -> Optional[RouteTemplate]:
-    """
-    固定机场、机型和“各目的设施人数”后，在最多 5 次海上着陆内搜索最优路线。
-
-    搜索允许：
-    - 任意交付顺序；
-    - 额外插入可加油设施；
-    - 在作为交付点的加油设施上选择提前加油或不加油；
-    - 必要时重访已经服务过的加油设施（重访仍计一次海上着陆）。
-    """
+    """固定机场和机型后，在着陆限制内搜索单架次路线。"""
     cache_key = (airport, aircraft_type, dest_sig)
     if cache_key in _ROUTE_CACHE:
         return _ROUTE_CACHE[cache_key]
@@ -1082,8 +1002,6 @@ def _search_route_for_aircraft(
     best: Optional[RouteTemplate] = None
     allow_pure_gas = False
 
-    # 轻量 dominance：只在“时间严格更早且余油不少”时剪枝。
-    # 这样主目标（总飞机使用时间）已经严格占优，不会因为次级指标而误剪。
     frontier: Dict[Tuple[str, Tuple[str, ...], int], List[Tuple[int, float]]] = defaultdict(list)
 
     def dominated(state_key: Tuple[str, Tuple[str, ...], int], elapsed: int, remain: float) -> bool:
@@ -1091,7 +1009,6 @@ def _search_route_for_aircraft(
         for old_t, old_r in labels:
             if old_t < elapsed and old_r + EPS >= remain:
                 return True
-        # 仅删除被新标签在主目标上严格支配的旧标签
         frontier[state_key] = [
             (old_t, old_r)
             for old_t, old_r in labels
@@ -1127,7 +1044,7 @@ def _search_route_for_aircraft(
             refuels=refuels,
             time_min=final_time,
             fuel_kg=final_fuel,
-            pass_km=pass_km,  # 此时已无人，返场段客座公里为 0
+            pass_km=pass_km,
             avail_km=final_avail,
             intransit_min=intransit,
         )
@@ -1149,11 +1066,9 @@ def _search_route_for_aircraft(
     ) -> None:
         nonlocal best
 
-        # 最少还要为每个未交付设施各落地一次
         if landings_used + len(unserved) > MAX_LANDINGS:
             return
 
-        # 已找到更短完整路线时，可做一个非常保守的时间下界剪枝
         if best is not None and elapsed >= best.time_min:
             return
 
@@ -1166,7 +1081,6 @@ def _search_route_for_aircraft(
                 current, remain, elapsed, stops, refuels,
                 fuel_used, pass_km, avail_km, intransit,
             )
-            # 即使直返不可行，也可能需要额外落地加油，因此不能 return。
 
         if landings_used >= MAX_LANDINGS:
             return
@@ -1174,9 +1088,6 @@ def _search_route_for_aircraft(
         onboard = sum(counts[f] for f in unserved)
         unserved_set = set(unserved)
 
-        # ----------------------------------------------------
-        # 1) 下一站选择一个尚未交付的目的设施
-        # ----------------------------------------------------
         for f in unserved:
             dist = D[current][f]
             need = dist * burn
@@ -1193,7 +1104,6 @@ def _search_route_for_aircraft(
             new_unserved = tuple(x for x in unserved if x != f)
             new_stops = stops + (f,)
 
-            # 非加油设施：固定停靠 10 分钟
             if f not in GAS_SET:
                 dfs(
                     current=f,
@@ -1209,8 +1119,6 @@ def _search_route_for_aircraft(
                     intransit=new_intransit,
                 )
             else:
-                # 加油站作为交付点：两种决策都要考虑。
-                # 不加油 10 min
                 dfs(
                     current=f,
                     unserved=new_unserved,
@@ -1224,7 +1132,6 @@ def _search_route_for_aircraft(
                     avail_km=new_avail_km,
                     intransit=new_intransit,
                 )
-                # 加油 20 min；允许“提前加油”，不要求下一段立刻油量不足
                 dfs(
                     current=f,
                     unserved=new_unserved,
@@ -1239,16 +1146,10 @@ def _search_route_for_aircraft(
                     intransit=new_intransit,
                 )
 
-        # ----------------------------------------------------
-        # 2) 插入“纯加油”停靠
-        # ----------------------------------------------------
-        # 必须至少留出 len(unserved) 个着陆位置给真正的交付设施。
         if allow_pure_gas and landings_used + 1 + len(unserved) <= MAX_LANDINGS:
             for g in GAS_STATIONS:
                 if g == current:
                     continue
-                # 若 g 是尚未交付的目的地，则到达它时必须立即完成交付，
-                # 应由上面的“交付设施”分支处理，不能把它当纯加油站跳过交付。
                 if g in unserved_set:
                     continue
 
@@ -1258,7 +1159,6 @@ def _search_route_for_aircraft(
                 if after < reserve - EPS:
                     continue
 
-                # 纯加油停靠的唯一意义就是加满；若加满后连任何“下一必要目标”都到不了，直接剪掉。
                 targets = unserved if unserved else (airport,)
                 if not any(full - D[g][v] * burn >= reserve - EPS for v in targets):
                     continue
@@ -1297,12 +1197,9 @@ def _search_route_for_aircraft(
         intransit=0,
     )
 
-    # 第一遍只允许真正的交付设施停靠（交付点若可加油，仍会比较加/不加油）。
-    # 若已有可行路线，则额外插入纯加油站只会增加着陆和停靠时间，通常没有必要。
+    # 先搜索交付节点；无可行解时再开放纯加油停靠。
     dfs(**initial_kwargs)
 
-    # 单架次搜索在纯加油策略下属于受控的精确/启发式混合；不声称穷举全部合法加油路线。
-    # 只有交付设施本身无法支撑燃油约束时，才开放额外纯加油停靠。
     if best is None:
         allow_pure_gas = True
         frontier.clear()
@@ -1316,7 +1213,6 @@ def optimize_template(
     dest_sig: Tuple[Tuple[str, int], ...],
     fixed_airport: Optional[str],
 ) -> Optional[RouteTemplate]:
-    """给定目的地人数分布和机场约束，联合优化机场、机型、路线与加油。"""
     cache_key = (fixed_airport, dest_sig)
     if cache_key in _TEMPLATE_CACHE:
         return _TEMPLATE_CACHE[cache_key]
@@ -1343,7 +1239,6 @@ def optimize_template(
 
 
 def optimize_demands(demands: Sequence[dict]) -> Optional[Sortie]:
-    """重新优化一组 Q1 人员能否由一个架次完成，以及该架次的最佳方案。"""
     if not demands or len(demands) > MAX_SEATS:
         return None
     fixed = fixed_airport_of_demands(demands)
@@ -1363,18 +1258,12 @@ def optimize_demands(demands: Sequence[dict]) -> Optional[Sortie]:
     return sortie
 
 
-# ============================================================
-# Stage 1：同目的地打包 + LAND 机场分配
-# ============================================================
+# Stage 1：初始打包与机场分配
 
 _PACK_DP_CACHE: Dict[Tuple[str, str, int], Optional[List[Tuple[int, RouteTemplate]]]] = {}
 
 
 def best_pack_one_airport(airport: str, dest: str, n_people: int) -> Optional[List[Tuple[int, RouteTemplate]]]:
-    """
-    将 n_people 名、同一目的地 dest、固定从 airport 出发的人员分成若干架次。
-    用 DP 在“人数分批 + 每批最优机型/路线”上最小化字典序目标。
-    """
     key = (airport, dest, n_people)
     if key in _PACK_DP_CACHE:
         return _PACK_DP_CACHE[key]
@@ -1382,7 +1271,6 @@ def best_pack_one_airport(airport: str, dest: str, n_people: int) -> Optional[Li
         _PACK_DP_CACHE[key] = []
         return []
 
-    # 每种批量 p (1..19) 的单架次最优模板
     option: Dict[int, RouteTemplate] = {}
     for p in range(1, min(MAX_SEATS, n_people) + 1):
         sig = ((dest, p),)
@@ -1418,14 +1306,6 @@ def metrics_of_template_plan(plan: Sequence[Tuple[int, RouteTemplate]]) -> Aggre
 
 
 def stage1_pack(demands: Sequence[dict]) -> List[Sortie]:
-    """
-    对每个目的设施独立构造初始解。
-
-    与 ver1 的关键区别：
-    - 不再把 LAND 与固定机场人员永久拆开；
-    - 对 LAND 在三个机场之间进行精确枚举分配；
-    - 每个机场内部用 DP 决定分几架、每架载多少人、选什么机型。
-    """
     by_dest: Dict[str, List[dict]] = defaultdict(list)
     for d in demands:
         by_dest[d["dest"]].append(d)
@@ -1445,7 +1325,6 @@ def stage1_pack(demands: Sequence[dict]) -> List[Sortie]:
         L = len(land_people)
         fixed_n = {A: len(fixed_people[A]) for A in AIRPORTS}
 
-        # 为每个机场预计算“固定人数 + 0..L 个 LAND”对应的最佳打包方案
         plans: Dict[str, Dict[int, Optional[List[Tuple[int, RouteTemplate]]]]] = {A: {} for A in AIRPORTS}
         for A in AIRPORTS:
             for extra in range(L + 1):
@@ -1455,7 +1334,6 @@ def stage1_pack(demands: Sequence[dict]) -> List[Sortie]:
         best_alloc = None
         best_metrics = None
 
-        # 三机场，枚举 x1+x2+x3=L；O(L^2)，每个设施人数通常很小。
         for x1 in range(L + 1):
             for x2 in range(L - x1 + 1):
                 x3 = L - x1 - x2
@@ -1477,7 +1355,6 @@ def stage1_pack(demands: Sequence[dict]) -> List[Sortie]:
         if best_alloc is None:
             raise RuntimeError(f"目的设施 {dest} 的人员无法构造任何可行初始方案")
 
-        # 按选中的 LAND 分配，绑定真实 person_id 到各模板
         cursor = 0
         for A in AIRPORTS:
             extra = best_alloc[A]
@@ -1501,9 +1378,7 @@ def stage1_pack(demands: Sequence[dict]) -> List[Sortie]:
     return sorties
 
 
-# ============================================================
-# Stage 2：节约合并（堆增量更新）
-# ============================================================
+# Stage 2：节约合并
 
 def quick_merge_possible(a: Sortie, b: Sortie) -> bool:
     if len(a.demands) + len(b.demands) > MAX_SEATS:
@@ -1524,12 +1399,6 @@ def pair_metrics(a: Sortie, b: Sortie) -> AggregateMetrics:
 
 
 def merge_improvement(a: Sortie, b: Sortie, merged: Sortie) -> Optional[Tuple[int, int, float, float]]:
-    """
-    按前三项目标筛选 heap 候选，前三项严格更优或完全相等时保留。
-
-    第四项这里只用于候选排序，不能作为最终接受依据；最终必须结合完整方案的
-    global seat utilization 重新进行四级字典序判断。
-    """
     before = pair_metrics(a, b)
     after = metrics_of_sortie(merged)
 
@@ -1541,7 +1410,7 @@ def merge_improvement(a: Sortie, b: Sortie, merged: Sortie) -> Optional[Tuple[in
     elif abs(after.fuel_kg - before.fuel_kg) > EPS:
         first_three_better = after.fuel_kg < before.fuel_kg
     else:
-        # 前三项完全相同，仍可能改善完整方案的全局座位利用率。
+        # 前三项目标相同时，仍需检查全局座位利用率。
         first_three_better = True
 
     if not first_three_better:
@@ -1562,14 +1431,6 @@ def try_merge(a: Sortie, b: Sortie) -> Optional[Sortie]:
 
 
 def stage2_merge(sorties: Sequence[Sortie]) -> List[Sortie]:
-    """
-    贪心节约合并。
-
-    与 ver1 不同：
-    - 不设置固定 CLOSE_THRESHOLD，避免把真正有节约的组合提前剪掉；
-    - 初始候选两两计算一次；每次合并后只计算“新架次 vs 其余活动架次”；
-    - 主目标优先，只有总飞机使用时间相同才比较在途时间/燃油/座位利用率。
-    """
     active: Dict[int, Sortie] = {i: s for i, s in enumerate(sorties)}
     total = aggregate_sorties(sorties)
     next_id = len(active)
@@ -1594,7 +1455,6 @@ def stage2_merge(sorties: Sequence[Sortie]) -> List[Sortie]:
         if imp is None:
             return
         save_t, save_it, save_f, gain_u = imp
-        # heapq 为最小堆，因此全部取负；counter 用于稳定排序。
         heapq.heappush(
             heap,
             (-save_t, -save_it, -save_f, -gain_u, counter, i, j, merged),
@@ -1611,9 +1471,8 @@ def stage2_merge(sorties: Sequence[Sortie]) -> List[Sortie]:
     while heap:
         neg_t, neg_it, neg_f, neg_u, _, i, j, merged = heapq.heappop(heap)
         if i not in active or j not in active:
-            continue  # stale
+            continue
 
-        # 活动对象从未原地修改，因此该候选仍然有效。
         a, b = active[i], active[j]
         imp = merge_improvement(a, b, merged)
         if imp is None:
@@ -1640,12 +1499,10 @@ def stage2_merge(sorties: Sequence[Sortie]) -> List[Sortie]:
             f"#sorties={len(active)}"
         )
 
-        # 只更新新架次与其他活动架次之间的候选
         for other_id in list(active):
             if other_id != new_id:
                 push_candidate(new_id, other_id)
 
-    # 为输出稳定，先按机场、机型、首个目的地、人数排序
     result = list(active.values())
     result.sort(
         key=lambda s: (
@@ -1659,16 +1516,13 @@ def stage2_merge(sorties: Sequence[Sortie]) -> List[Sortie]:
     return result
 
 
-# ============================================================
-# Stage 3：可逆二架次大邻域搜索
-# ============================================================
+# Stage 3：二架次重划分
 
 def _replace_metrics(
     total: AggregateMetrics,
     old_sorties: Sequence[Sortie],
     replacement: Sequence[Sortie],
 ) -> AggregateMetrics:
-    """用可加分量增量计算完整全局指标，利用率由全局分子、分母重新求比值。"""
     old = aggregate_sorties(old_sorties)
     new = aggregate_sorties(replacement)
     return AggregateMetrics(
@@ -1690,7 +1544,6 @@ def _replace_pair_metrics(
 
 
 def _demand_classes(demands: Sequence[dict]) -> List[List[dict]]:
-    """同 origin、destination 的人员在 Q1 中对路线可行性完全等价。"""
     groups: Dict[Tuple[str, str], List[dict]] = defaultdict(list)
     for d in demands:
         groups[(d["origin"], d["dest"])].append(d)
@@ -1698,7 +1551,6 @@ def _demand_classes(demands: Sequence[dict]) -> List[List[dict]]:
 
 
 def _ordered_split_values(c: int, current_left: int, lo: int, hi: int) -> List[int]:
-    """先搜索当前分配附近，再搜索整组移动、半拆分及其余合法值。"""
     raw = [current_left]
     for delta in range(1, c + 1):
         raw.extend((current_left - delta, current_left + delta))
@@ -1718,7 +1570,6 @@ def _deadline_reached(deadline: Optional[float]) -> bool:
 
 
 def _batch_deadline(global_deadline: Optional[float], seconds: float) -> float:
-    """为单个邻域批次分配时间，避免某一阶段长期独占搜索。"""
     local_deadline = time.time() + max(0.1, seconds)
     if global_deadline is None:
         return local_deadline
@@ -1732,13 +1583,6 @@ def best_two_sortie_repartition(
     split_limit: int,
     deadline: Optional[float] = None,
 ) -> Tuple[List[Sortie], int, bool]:
-    """
-    对两条架次的全部人员做可逆重划分。
-
-    与贪心 merge 不同，这里允许两条旧路线先被完全拆开，再把人员交换后
-    重新联合优化机场、机型、访问顺序与加油。若组合数不超过 split_limit，
-    该二架次邻域被完整枚举；更大邻域采用确定性的受控枚举。
-    """
     all_demands = list(a.demands) + list(b.demands)
     before = [a, b]
     best = before
@@ -1859,7 +1703,6 @@ def best_two_sortie_repartition(
 
 
 def _pair_search_priority(a: Sortie, b: Sortie) -> Tuple[float, int, str, str]:
-    """只用于安排计算顺序，不作为可行性硬剪枝。"""
     dest_a = {d["dest"] for d in a.demands}
     dest_b = {d["dest"] for d in b.demands}
     proximity = min(D[x][y] for x in dest_a for y in dest_b)
@@ -1897,7 +1740,6 @@ def _pair_records(sorties: Sequence[Sortie]) -> List[dict]:
 
 
 def _multi_source_pair_candidates(sorties: Sequence[Sortie], pair_budget: int) -> List[Tuple[int, int]]:
-    """由地理、共享目的地、大时间和容量潜力四个来源组成候选池。"""
     records = _pair_records(sorties)
     if not records:
         return []
@@ -1922,7 +1764,6 @@ def _multi_source_pair_candidates(sorties: Sequence[Sortie], pair_budget: int) -
             if key not in seen:
                 seen.add(key)
                 chosen.append(key)
-    # 多来源重叠较多时按交错顺序补足预算。
     rank_pos = [0, 0, 0, 0]
     while len(chosen) < budget:
         added = False
@@ -1951,13 +1792,6 @@ def stage3_large_neighborhood(
     split_limit: int = 20000,
     deadline: Optional[float] = None,
 ) -> Tuple[List[Sortie], Dict[str, int]]:
-    """
-    变量邻域下降：每轮检查一批最有希望的二架次邻域并采用全局最佳改进。
-
-    接受判据始终是完整解的严格字典序，因此绝不允许用在途时间、燃油或
-    利用率换取哪怕 1 分钟的总飞机使用时间。邻域操作可拆分旧合并，克服
-    Stage 2 只能单向合并的核心缺陷。
-    """
     current = list(sorties)
     total = aggregate_sorties(current)
     moves = 0
@@ -2019,12 +1853,9 @@ def stage3_large_neighborhood(
     }
 
 
-# ============================================================
-# Stage 4：受控三架次到二架次重组
-# ============================================================
+# Stage 4：三架次到二架次重组
 
 def _triple_candidates(sorties: Sequence[Sortie], triple_budget: int) -> List[Tuple[int, int, int]]:
-    """从每条路线的少量二架次邻居生成三元组，避免完整 O(n^3) 枚举。"""
     n = len(sorties)
     if n < 3:
         return []
@@ -2091,7 +1922,6 @@ def _best_three_to_two_repartition(
         sum(1 for d in anchor.demands if d["origin"] == g[0]["origin"] and d["dest"] == g[0]["dest"])
         for g in classes
     ]
-    # state: allocation, left/right size, fixed airport, destination sets, displacement
     states = [(tuple(), 0, 0, None, None, frozenset(), frozenset(), 0)]
     total_people = len(all_demands)
     timed_out = False
@@ -2240,9 +2070,7 @@ def stage4_three_to_two(
     }
 
 
-# ============================================================
-# Stage 6/7：通用多架次重划分、4→3 与 3→3
-# ============================================================
+# Stage 6/7：多架次重划分
 
 def _composition_candidates(
     count: int,
@@ -2250,7 +2078,6 @@ def _composition_candidates(
     current: Tuple[int, ...],
     branch_limit: int,
 ) -> List[Tuple[int, ...]]:
-    """为一个聚合需求类生成确定性的受控人数分配。"""
     raw: List[Tuple[int, ...]] = []
 
     def add(values: Sequence[int]) -> None:
@@ -2271,7 +2098,6 @@ def _composition_candidates(
             balanced[(shift + k) % target_routes] += 1
         add(balanced)
 
-    # 当前分配附近做一至两人的成对搬移。
     base = list(current)
     for delta in (1, 2, 3):
         for src in range(target_routes):
@@ -2283,7 +2109,6 @@ def _composition_candidates(
                 moved[dst] += delta
                 add(moved)
 
-    # 小需求类完整枚举，较大需求类保留结构化分配。
     if count <= 8:
         def enumerate_compositions(pos: int, remain: int, prefix: Tuple[int, ...]) -> None:
             if pos == target_routes - 1:
@@ -2328,7 +2153,6 @@ def best_multi_sortie_repartition(
     branch_limit: int = 40,
     deadline: Optional[float] = None,
 ) -> Tuple[List[Sortie], int, bool]:
-    """把若干旧架次的聚合需求重划分为指定数量的新架次。"""
     all_demands = [d for s in old for d in s.demands]
     if target_routes <= 0 or len(all_demands) > target_routes * MAX_SEATS:
         return list(old), 0, False
@@ -2338,7 +2162,6 @@ def best_multi_sortie_repartition(
         _current_multi_allocation(group, old, target_routes)
         for group in classes
     ]
-    # state = allocations, sizes, fixed airports, destinations, displacement
     states = [(
         tuple(),
         (0,) * target_routes,
@@ -2431,7 +2254,6 @@ def best_multi_sortie_repartition(
             break
         if len(allocations) != len(classes) or any(size == 0 for size in sizes):
             continue
-        # 新架次无标签，按分配向量排序去除镜像状态。
         canonical = tuple(sorted(tuple(a[j] for a in allocations) for j in range(target_routes)))
         if canonical in seen:
             continue
@@ -2466,7 +2288,6 @@ def _neighbor_subsets(
     min_people: int = 0,
     max_people: Optional[int] = None,
 ) -> List[Tuple[int, ...]]:
-    """从真实目的地邻接图生成小规模候选子集，避免完整组合枚举。"""
     n = len(sorties)
     if n < subset_size:
         return []
@@ -2652,7 +2473,6 @@ def stage7_three_to_three(
 
 
 def _destroy_target_routes(total_people: int, destroy_size: int) -> Tuple[int, ...]:
-    """返回容量下界至 destroy_size-1 的全部修复架次数。"""
     min_routes = int(math.ceil(total_people / MAX_SEATS))
     return tuple(range(min_routes, destroy_size))
 
@@ -2666,7 +2486,6 @@ def stage8_destroy_repair(
     max_moves: int = 0,
     deadline: Optional[float] = None,
 ) -> Tuple[List[Sortie], Dict[str, int]]:
-    """破坏4~6条相邻路线，比较所有可减少架次的 target route 数。"""
     current = list(sorties)
     total = aggregate_sorties(current)
     checked = entered = accepted = evaluated = 0
@@ -2751,12 +2570,10 @@ def stage8_destroy_repair(
     return current, stats
 
 
-# ============================================================
-# 结果统计与完整校验
-# ============================================================
+# 结果统计与校验
 
 def simulate_sortie(sortie: Sortie) -> RouteTemplate:
-    """按最终输出路线重新模拟，独立校验时间/燃油/客座公里/在途时间。"""
+    """从头模拟单架次并重新计算各项指标。"""
     t = sortie.aircraft_type
     ac = AC[t]
     seats = int(ac["seats"])
@@ -2821,7 +2638,6 @@ def simulate_sortie(sortie: Sortie) -> RouteTemplate:
             remain = full
         current = fid
 
-    # 返场段
     onboard = sum(1 for d in sortie.demands if d["dest"] not in delivered)
     if onboard != 0:
         raise ValueError("返场前仍有人员未送达")
@@ -2854,7 +2670,6 @@ def validate_solution(sorties: Sequence[Sortie], demands: Sequence[dict]) -> Non
 
     for s in sorties:
         sim = simulate_sortie(s)
-        # 校验存储指标与重新模拟结果一致
         if s.time_min != sim.time_min:
             raise ValueError(f"架次时间缓存不一致: {s.time_min} vs {sim.time_min}")
         if abs(s.fuel_kg - sim.fuel_kg) > 1e-6:
@@ -2885,9 +2700,144 @@ def compute_stats(sorties: Sequence[Sortie]) -> dict:
     }
 
 
-# ============================================================
+def generate_paper_figures(
+    sorties: Sequence[Sortie],
+    reporter: ProgressReporter,
+    output_dir: str = FIGURE_DIR,
+) -> List[str]:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.font_manager as font_manager
+    import matplotlib.pyplot as plt
+
+    os.makedirs(output_dir, exist_ok=True)
+    available_fonts = {font.name for font in font_manager.fontManager.ttflist}
+    for name in ("Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "Arial Unicode MS"):
+        if name in available_fonts:
+            plt.rcParams["font.sans-serif"] = [name]
+            break
+    plt.rcParams["axes.unicode_minus"] = False
+    plt.rcParams["figure.facecolor"] = "white"
+    plt.rcParams["axes.facecolor"] = "white"
+
+    colors = {"T1": "#3B6FB6", "T2": "#D9822B", "T3": "#3E8E63"}
+    paths: List[str] = []
+
+    best_rows = [row for row in reporter.solution_history if row["is_best"]]
+    final_stats = compute_stats(sorties)
+    final_keys = ("total_time_min", "total_intransit_min", "total_fuel_kg", "seat_util")
+    if not best_rows or any(
+        abs(best_rows[-1][key] - final_stats[key]) > 1e-8 for key in final_keys
+    ):
+        best_rows.append({
+            "wall_sec": time.time() - reporter.start_time,
+            "source": "Final",
+            "is_best": True,
+            **final_stats,
+        })
+
+    x = [row["wall_sec"] for row in best_rows]
+    series = (
+        ("total_time_min", "总飞机使用时间", "min"),
+        ("total_intransit_min", "人员总在途时间", "min"),
+        ("total_fuel_kg", "总燃油消耗量", "kg"),
+        ("seat_util", "全局座位利用率", "比例"),
+    )
+    fig, axes = plt.subplots(2, 2, figsize=(10, 7), constrained_layout=True)
+    for ax, (key, title, unit) in zip(axes.flat, series):
+        y = [row[key] for row in best_rows]
+        ax.step(x, y, where="post", color="#2F5D8C", linewidth=1.8)
+        ax.scatter(x, y, color="#2F5D8C", s=20, zorder=3)
+        ax.set_title(title)
+        ax.set_xlabel("运行时间（s）")
+        ax.set_ylabel(unit)
+        ax.grid(axis="y", color="#D9D9D9", linewidth=0.6)
+    fig.suptitle("Q1 当前最好合法解指标演化")
+    path = os.path.join(output_dir, "q1-convergence.png")
+    fig.savefig(path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    paths.append(path)
+
+    status_rows = list(reporter.status_history)
+    if not status_rows:
+        status_rows.append({
+            "wall_sec": time.time() - reporter.start_time,
+            "pool_generated": reporter.pool.total_generated,
+            "pool_nondominated": len(reporter.pool),
+            "neighborhoods_checked": reporter.neighborhoods_checked,
+            "stagnation_rounds": reporter.stagnation_rounds,
+            "level": reporter.level,
+        })
+    sx = [row["wall_sec"] for row in status_rows]
+    fig, axes = plt.subplots(2, 1, figsize=(10, 7), constrained_layout=True, sharex=True)
+    axes[0].plot(
+        sx,
+        [row["pool_generated"] for row in status_rows],
+        label="累计候选列尝试数",
+        color="#3B6FB6",
+    )
+    axes[0].plot(sx, [row["pool_nondominated"] for row in status_rows], label="非支配列", color="#D9822B")
+    axes[0].set_ylabel("路线列数")
+    axes[0].legend(frameon=False)
+    axes[0].grid(axis="y", color="#D9D9D9", linewidth=0.6)
+    axes[1].plot(sx, [row["neighborhoods_checked"] for row in status_rows], color="#3E8E63")
+    axes[1].set_xlabel("运行时间（s）")
+    axes[1].set_ylabel("累计检查邻域数")
+    axes[1].grid(axis="y", color="#D9D9D9", linewidth=0.6)
+    level_ax = axes[1].twinx()
+    level_ax.step(sx, [row["level"] for row in status_rows], where="post", color="#8C5A9E", alpha=0.8)
+    level_ax.set_ylabel("邻域等级")
+    level_ax.set_yticks(range(5))
+    fig.suptitle("Q1 路线池与邻域搜索过程")
+    path = os.path.join(output_dir, "q1-search-process.png")
+    fig.savefig(path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    paths.append(path)
+
+    aircraft_types = [t for t in ("T1", "T2", "T3") if any(s.aircraft_type == t for s in sorties)]
+    counts = [sum(s.aircraft_type == t for s in sorties) for t in aircraft_types]
+    times = [sum(s.time_min for s in sorties if s.aircraft_type == t) for t in aircraft_types]
+    utils = [[s.seat_util for s in sorties if s.aircraft_type == t] for t in aircraft_types]
+    fig, axes = plt.subplots(2, 2, figsize=(10, 7), constrained_layout=True)
+    bar_colors = [colors[t] for t in aircraft_types]
+    axes[0, 0].bar(aircraft_types, counts, color=bar_colors)
+    axes[0, 0].set_title("各机型架次数")
+    axes[0, 0].set_ylabel("架次")
+    axes[0, 1].bar(aircraft_types, times, color=bar_colors)
+    axes[0, 1].set_title("各机型飞机使用时间")
+    axes[0, 1].set_ylabel("min")
+    box = axes[1, 0].boxplot(utils, patch_artist=True)
+    axes[1, 0].set_xticks(range(1, len(aircraft_types) + 1), aircraft_types)
+    for patch, color in zip(box["boxes"], bar_colors):
+        patch.set_facecolor(color)
+    axes[1, 0].set_title("单架次座位利用率分布")
+    axes[1, 0].set_ylabel("比例")
+    for t in aircraft_types:
+        subset = [s for s in sorties if s.aircraft_type == t]
+        axes[1, 1].scatter(
+            [len(s.demands) for s in subset],
+            [s.time_min for s in subset],
+            label=t,
+            color=colors[t],
+            s=28,
+            alpha=0.8,
+        )
+    axes[1, 1].set_title("载客人数与架次时间")
+    axes[1, 1].set_xlabel("运输人数")
+    axes[1, 1].set_ylabel("min")
+    axes[1, 1].legend(frameon=False)
+    for ax in axes.flat:
+        ax.grid(axis="y", color="#D9D9D9", linewidth=0.6)
+    fig.suptitle("Q1 最终运输方案结构")
+    path = os.path.join(output_dir, "q1-route-profile.png")
+    fig.savefig(path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    paths.append(path)
+    return paths
+
+
 # CSV 输出
-# ============================================================
 
 def write_output(sorties: Sequence[Sortie], routes_path: str, assign_path: str) -> None:
     os.makedirs(os.path.dirname(routes_path) or ".", exist_ok=True)
@@ -2923,7 +2873,7 @@ def write_output(sorties: Sequence[Sortie], routes_path: str, assign_path: str) 
             for i, fid in enumerate(s.stop_fids, start=1):
                 first_stop.setdefault(fid, i)
             for d in s.demands:
-                # Q1：所有人都在起飞机场上机，因此 pickup_stop_order 恒为 0。
+                # Q1 中所有人的 pickup_stop_order 均为 0。
                 delivery = first_stop[d["dest"]]
                 w.writerow([d["pid"], t, fn, 0, delivery])
 
@@ -2933,7 +2883,7 @@ def read_output_solution(
     assign_path: str,
     demands: Sequence[dict],
 ) -> List[Sortie]:
-    """从既有正式 CSV 恢复、重模拟并验证历史 incumbent。"""
+    """从正式 CSV 恢复并验证历史可行解。"""
     by_pid = {d["pid"]: d for d in demands}
     with open(routes_path, encoding="utf-8-sig", newline="") as f:
         route_rows = list(csv.DictReader(f))
@@ -2983,9 +2933,7 @@ def read_output_solution(
     return sorties
 
 
-# ============================================================
-# 命令行与主程序
-# ============================================================
+# 主程序
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Q1 Route Pool + Restricted Master question1_ver6")
@@ -3057,7 +3005,8 @@ def main() -> None:
         pool.add_many(candidate)
         cand_metrics = aggregate_sorties(candidate)
         old_metrics = aggregate_sorties(best_valid_solution) if best_valid_solution else None
-        if old_metrics is None or lex_better(cand_metrics, old_metrics):
+        improved = old_metrics is None or lex_better(cand_metrics, old_metrics)
+        if improved:
             old_time = None if old_metrics is None else old_metrics.time_min
             best_valid_solution = list(candidate)
             _PROGRESS.set_best(best_valid_solution)
@@ -3067,8 +3016,8 @@ def main() -> None:
                     f"source={source}, intransit={cand_metrics.intransit_min}, "
                     f"fuel={cand_metrics.fuel_kg:.1f}, util={cand_metrics.seat_util:.6f}"
                 )
-            return True
-        return False
+        _PROGRESS.record_solution(source, candidate, improved)
+        return improved
 
     try:
         print("加载数据...")
@@ -3289,18 +3238,25 @@ def main() -> None:
     finally:
         _ACTIVE_ROUTE_POOL = None
         pool.clean()
+        if _PROGRESS is not None:
+            _PROGRESS.maybe_print(force=True)
         if best_valid_solution and demands:
             print("\n最终保护性校验与输出...")
             validate_solution(best_valid_solution, demands)
             write_output(best_valid_solution, routes_out, assign_out)
-            print_stats("=== ver6 当前最好合法结果 ===", best_valid_solution)
+            print_stats("question1 当前最好合法结果", best_valid_solution)
             print(f"  -> {routes_out}")
             print(f"  -> {assign_out}")
+            try:
+                figure_paths = generate_paper_figures(best_valid_solution, _PROGRESS, FIGURE_DIR)
+                print("论文图表已生成：")
+                for figure_path in figure_paths:
+                    print(f"  -> {figure_path}")
+            except Exception as exc:
+                print(f"图表生成失败，不影响合法解与 CSV 输出：{exc}")
             print("VALIDATION PASSED")
         else:
             print("未形成可验证初始解，因此没有覆盖正式输出。")
-        if _PROGRESS is not None:
-            _PROGRESS.maybe_print(force=True)
         print(f"总运行时间: {time.time() - t0:.2f} s")
         print(
             f"Route Pool: generated={pool.total_generated}, "
