@@ -1,0 +1,733 @@
+{
+  "algorithm": "Q2 pickup-delivery route pool + ALNS + lexicographic set partitioning",
+  "python": "3.11.9",
+  "people": 4000,
+  "classes": 264,
+  "route_pool_size": 8478,
+  "epochs_completed": 20,
+  "sorties": 118,
+  "metrics": {
+    "total_aircraft_time_min": 20751,
+    "total_person_intransit_min": 248493,
+    "total_fuel_kg": 161473.1,
+    "seat_utilization": 0.7684490555482172
+  },
+  "objective_order": [
+    "total_aircraft_time_min",
+    "total_person_intransit_min",
+    "total_fuel_kg",
+    "seat_utilization_max"
+  ],
+  "claim_scope": "optimal_over_current_generated_route_pool",
+  "original_problem_global_optimum_claimed": false,
+  "route_oracle_calls": 15607,
+  "route_oracle_cache_hits": 399656,
+  "operator_uses": {
+    "merge": 48,
+    "repartition2": 970,
+    "relocate": 293,
+    "three_to_two": 54,
+    "swap": 1035
+  },
+  "operator_new_patterns": {
+    "repartition2": 1125,
+    "swap": 1224,
+    "relocate": 295
+  },
+  "master_history": [
+    {
+      "epoch": 0,
+      "pool_size": 5834,
+      "optimal_within_pool": true,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "OPTIMAL",
+          "wall_time_s": 2.062,
+          "objective": 20778
+        },
+        {
+          "stage": "total_person_intransit",
+          "status": "OPTIMAL",
+          "wall_time_s": 5.843,
+          "objective": 248626
+        },
+        {
+          "stage": "total_fuel_scaled",
+          "status": "OPTIMAL",
+          "wall_time_s": 10.625,
+          "objective": 161899500
+        },
+        {
+          "stage": "seat_utilization_1",
+          "status": "OPTIMAL",
+          "wall_time_s": 13.984,
+          "objective": 0
+        }
+      ]
+    },
+    {
+      "epoch": 1,
+      "pool_size": 5922,
+      "new_patterns": 88,
+      "improved": false,
+      "optimal_within_pool": true,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "OPTIMAL",
+          "wall_time_s": 1.063,
+          "objective": 20778
+        },
+        {
+          "stage": "total_person_intransit",
+          "status": "OPTIMAL",
+          "wall_time_s": 5.906,
+          "objective": 248626
+        },
+        {
+          "stage": "total_fuel_scaled",
+          "status": "OPTIMAL",
+          "wall_time_s": 10.218,
+          "objective": 161899500
+        },
+        {
+          "stage": "seat_utilization_1",
+          "status": "OPTIMAL",
+          "wall_time_s": 13.281,
+          "objective": 0
+        }
+      ]
+    },
+    {
+      "epoch": 2,
+      "pool_size": 6032,
+      "new_patterns": 110,
+      "improved": false,
+      "optimal_within_pool": true,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "OPTIMAL",
+          "wall_time_s": 1.172,
+          "objective": 20778
+        },
+        {
+          "stage": "total_person_intransit",
+          "status": "OPTIMAL",
+          "wall_time_s": 6.234,
+          "objective": 248626
+        },
+        {
+          "stage": "total_fuel_scaled",
+          "status": "OPTIMAL",
+          "wall_time_s": 12.594,
+          "objective": 161899500
+        },
+        {
+          "stage": "seat_utilization_1",
+          "status": "OPTIMAL",
+          "wall_time_s": 22.766,
+          "objective": 0
+        }
+      ]
+    },
+    {
+      "epoch": 3,
+      "pool_size": 6180,
+      "new_patterns": 148,
+      "improved": false,
+      "optimal_within_pool": true,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "OPTIMAL",
+          "wall_time_s": 1.563,
+          "objective": 20778
+        },
+        {
+          "stage": "total_person_intransit",
+          "status": "OPTIMAL",
+          "wall_time_s": 8.328,
+          "objective": 248626
+        },
+        {
+          "stage": "total_fuel_scaled",
+          "status": "OPTIMAL",
+          "wall_time_s": 11.359,
+          "objective": 161899500
+        },
+        {
+          "stage": "seat_utilization_1",
+          "status": "OPTIMAL",
+          "wall_time_s": 15.031,
+          "objective": 0
+        }
+      ]
+    },
+    {
+      "epoch": 4,
+      "pool_size": 6309,
+      "new_patterns": 129,
+      "improved": false,
+      "optimal_within_pool": true,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "OPTIMAL",
+          "wall_time_s": 1.61,
+          "objective": 20778
+        },
+        {
+          "stage": "total_person_intransit",
+          "status": "OPTIMAL",
+          "wall_time_s": 8.547,
+          "objective": 248626
+        },
+        {
+          "stage": "total_fuel_scaled",
+          "status": "OPTIMAL",
+          "wall_time_s": 11.844,
+          "objective": 161899500
+        },
+        {
+          "stage": "seat_utilization_1",
+          "status": "OPTIMAL",
+          "wall_time_s": 15.515,
+          "objective": 0
+        }
+      ]
+    },
+    {
+      "epoch": 5,
+      "pool_size": 6454,
+      "new_patterns": 145,
+      "improved": false,
+      "optimal_within_pool": true,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "OPTIMAL",
+          "wall_time_s": 1.546,
+          "objective": 20778
+        },
+        {
+          "stage": "total_person_intransit",
+          "status": "OPTIMAL",
+          "wall_time_s": 8.562,
+          "objective": 248626
+        },
+        {
+          "stage": "total_fuel_scaled",
+          "status": "OPTIMAL",
+          "wall_time_s": 12.141,
+          "objective": 161899500
+        },
+        {
+          "stage": "seat_utilization_1",
+          "status": "OPTIMAL",
+          "wall_time_s": 17.015,
+          "objective": 0
+        }
+      ]
+    },
+    {
+      "epoch": 6,
+      "pool_size": 6596,
+      "new_patterns": 142,
+      "improved": false,
+      "optimal_within_pool": true,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "OPTIMAL",
+          "wall_time_s": 1.765,
+          "objective": 20778
+        },
+        {
+          "stage": "total_person_intransit",
+          "status": "OPTIMAL",
+          "wall_time_s": 14.328,
+          "objective": 248626
+        },
+        {
+          "stage": "total_fuel_scaled",
+          "status": "OPTIMAL",
+          "wall_time_s": 15.782,
+          "objective": 161899500
+        },
+        {
+          "stage": "seat_utilization_1",
+          "status": "OPTIMAL",
+          "wall_time_s": 20.875,
+          "objective": 0
+        }
+      ]
+    },
+    {
+      "epoch": 7,
+      "pool_size": 6747,
+      "new_patterns": 151,
+      "improved": false,
+      "optimal_within_pool": true,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "OPTIMAL",
+          "wall_time_s": 2.141,
+          "objective": 20778
+        },
+        {
+          "stage": "total_person_intransit",
+          "status": "OPTIMAL",
+          "wall_time_s": 13.0,
+          "objective": 248626
+        },
+        {
+          "stage": "total_fuel_scaled",
+          "status": "OPTIMAL",
+          "wall_time_s": 16.515,
+          "objective": 161899500
+        },
+        {
+          "stage": "seat_utilization_1",
+          "status": "OPTIMAL",
+          "wall_time_s": 21.687,
+          "objective": 0
+        }
+      ]
+    },
+    {
+      "epoch": 8,
+      "pool_size": 6868,
+      "new_patterns": 121,
+      "improved": true,
+      "optimal_within_pool": true,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "OPTIMAL",
+          "wall_time_s": 2.906,
+          "objective": 20751
+        },
+        {
+          "stage": "total_person_intransit",
+          "status": "OPTIMAL",
+          "wall_time_s": 14.094,
+          "objective": 248493
+        },
+        {
+          "stage": "total_fuel_scaled",
+          "status": "OPTIMAL",
+          "wall_time_s": 20.797,
+          "objective": 161473100
+        },
+        {
+          "stage": "seat_utilization_1",
+          "status": "OPTIMAL",
+          "wall_time_s": 28.766,
+          "objective": 0
+        }
+      ]
+    },
+    {
+      "epoch": 9,
+      "pool_size": 6999,
+      "new_patterns": 131,
+      "improved": false,
+      "optimal_within_pool": true,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "OPTIMAL",
+          "wall_time_s": 2.969,
+          "objective": 20751
+        },
+        {
+          "stage": "total_person_intransit",
+          "status": "OPTIMAL",
+          "wall_time_s": 11.766,
+          "objective": 248493
+        },
+        {
+          "stage": "total_fuel_scaled",
+          "status": "OPTIMAL",
+          "wall_time_s": 19.359,
+          "objective": 161473100
+        },
+        {
+          "stage": "seat_utilization_1",
+          "status": "OPTIMAL",
+          "wall_time_s": 27.093,
+          "objective": 0
+        }
+      ]
+    },
+    {
+      "epoch": 10,
+      "pool_size": 7125,
+      "new_patterns": 126,
+      "improved": false,
+      "optimal_within_pool": true,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "OPTIMAL",
+          "wall_time_s": 3.61,
+          "objective": 20751
+        },
+        {
+          "stage": "total_person_intransit",
+          "status": "OPTIMAL",
+          "wall_time_s": 18.11,
+          "objective": 248493
+        },
+        {
+          "stage": "total_fuel_scaled",
+          "status": "OPTIMAL",
+          "wall_time_s": 17.797,
+          "objective": 161473100
+        },
+        {
+          "stage": "seat_utilization_1",
+          "status": "OPTIMAL",
+          "wall_time_s": 30.063,
+          "objective": 0
+        }
+      ]
+    },
+    {
+      "epoch": 11,
+      "pool_size": 7269,
+      "new_patterns": 144,
+      "improved": false,
+      "optimal_within_pool": true,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "OPTIMAL",
+          "wall_time_s": 2.953,
+          "objective": 20751
+        },
+        {
+          "stage": "total_person_intransit",
+          "status": "OPTIMAL",
+          "wall_time_s": 17.11,
+          "objective": 248493
+        },
+        {
+          "stage": "total_fuel_scaled",
+          "status": "OPTIMAL",
+          "wall_time_s": 21.328,
+          "objective": 161473100
+        },
+        {
+          "stage": "seat_utilization_1",
+          "status": "OPTIMAL",
+          "wall_time_s": 31.094,
+          "objective": 0
+        }
+      ]
+    },
+    {
+      "epoch": 12,
+      "pool_size": 7408,
+      "new_patterns": 139,
+      "improved": false,
+      "optimal_within_pool": true,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "OPTIMAL",
+          "wall_time_s": 3.75,
+          "objective": 20751
+        },
+        {
+          "stage": "total_person_intransit",
+          "status": "OPTIMAL",
+          "wall_time_s": 17.484,
+          "objective": 248493
+        },
+        {
+          "stage": "total_fuel_scaled",
+          "status": "OPTIMAL",
+          "wall_time_s": 21.969,
+          "objective": 161473100
+        },
+        {
+          "stage": "seat_utilization_1",
+          "status": "OPTIMAL",
+          "wall_time_s": 45.266,
+          "objective": 0
+        }
+      ]
+    },
+    {
+      "epoch": 13,
+      "pool_size": 7547,
+      "new_patterns": 139,
+      "improved": false,
+      "optimal_within_pool": true,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "OPTIMAL",
+          "wall_time_s": 3.984,
+          "objective": 20751
+        },
+        {
+          "stage": "total_person_intransit",
+          "status": "OPTIMAL",
+          "wall_time_s": 17.063,
+          "objective": 248493
+        },
+        {
+          "stage": "total_fuel_scaled",
+          "status": "OPTIMAL",
+          "wall_time_s": 21.907,
+          "objective": 161473100
+        },
+        {
+          "stage": "seat_utilization_1",
+          "status": "OPTIMAL",
+          "wall_time_s": 39.047,
+          "objective": 0
+        }
+      ]
+    },
+    {
+      "epoch": 14,
+      "pool_size": 7680,
+      "new_patterns": 133,
+      "improved": false,
+      "optimal_within_pool": true,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "OPTIMAL",
+          "wall_time_s": 3.844,
+          "objective": 20751
+        },
+        {
+          "stage": "total_person_intransit",
+          "status": "OPTIMAL",
+          "wall_time_s": 17.828,
+          "objective": 248493
+        },
+        {
+          "stage": "total_fuel_scaled",
+          "status": "OPTIMAL",
+          "wall_time_s": 22.516,
+          "objective": 161473100
+        },
+        {
+          "stage": "seat_utilization_1",
+          "status": "OPTIMAL",
+          "wall_time_s": 44.579,
+          "objective": 0
+        }
+      ]
+    },
+    {
+      "epoch": 15,
+      "pool_size": 7811,
+      "new_patterns": 131,
+      "improved": false,
+      "optimal_within_pool": true,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "OPTIMAL",
+          "wall_time_s": 3.578,
+          "objective": 20751
+        },
+        {
+          "stage": "total_person_intransit",
+          "status": "OPTIMAL",
+          "wall_time_s": 17.906,
+          "objective": 248493
+        },
+        {
+          "stage": "total_fuel_scaled",
+          "status": "OPTIMAL",
+          "wall_time_s": 26.469,
+          "objective": 161473100
+        },
+        {
+          "stage": "seat_utilization_1",
+          "status": "OPTIMAL",
+          "wall_time_s": 43.766,
+          "objective": 0
+        }
+      ]
+    },
+    {
+      "epoch": 16,
+      "pool_size": 7949,
+      "new_patterns": 138,
+      "improved": false,
+      "optimal_within_pool": true,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "OPTIMAL",
+          "wall_time_s": 3.609,
+          "objective": 20751
+        },
+        {
+          "stage": "total_person_intransit",
+          "status": "OPTIMAL",
+          "wall_time_s": 20.875,
+          "objective": 248493
+        },
+        {
+          "stage": "total_fuel_scaled",
+          "status": "OPTIMAL",
+          "wall_time_s": 26.266,
+          "objective": 161473100
+        },
+        {
+          "stage": "seat_utilization_1",
+          "status": "OPTIMAL",
+          "wall_time_s": 41.797,
+          "objective": 0
+        }
+      ]
+    },
+    {
+      "epoch": 17,
+      "pool_size": 8066,
+      "new_patterns": 117,
+      "improved": false,
+      "optimal_within_pool": true,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "OPTIMAL",
+          "wall_time_s": 4.265,
+          "objective": 20751
+        },
+        {
+          "stage": "total_person_intransit",
+          "status": "OPTIMAL",
+          "wall_time_s": 21.422,
+          "objective": 248493
+        },
+        {
+          "stage": "total_fuel_scaled",
+          "status": "OPTIMAL",
+          "wall_time_s": 31.125,
+          "objective": 161473100
+        },
+        {
+          "stage": "seat_utilization_1",
+          "status": "OPTIMAL",
+          "wall_time_s": 55.813,
+          "objective": 0
+        }
+      ]
+    },
+    {
+      "epoch": 18,
+      "pool_size": 8200,
+      "new_patterns": 134,
+      "improved": false,
+      "optimal_within_pool": true,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "OPTIMAL",
+          "wall_time_s": 4.578,
+          "objective": 20751
+        },
+        {
+          "stage": "total_person_intransit",
+          "status": "OPTIMAL",
+          "wall_time_s": 22.578,
+          "objective": 248493
+        },
+        {
+          "stage": "total_fuel_scaled",
+          "status": "OPTIMAL",
+          "wall_time_s": 25.734,
+          "objective": 161473100
+        },
+        {
+          "stage": "seat_utilization_1",
+          "status": "OPTIMAL",
+          "wall_time_s": 58.703,
+          "objective": 0
+        }
+      ]
+    },
+    {
+      "epoch": 19,
+      "pool_size": 8344,
+      "new_patterns": 144,
+      "improved": false,
+      "optimal_within_pool": true,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "OPTIMAL",
+          "wall_time_s": 4.922,
+          "objective": 20751
+        },
+        {
+          "stage": "total_person_intransit",
+          "status": "OPTIMAL",
+          "wall_time_s": 18.922,
+          "objective": 248493
+        },
+        {
+          "stage": "total_fuel_scaled",
+          "status": "OPTIMAL",
+          "wall_time_s": 33.688,
+          "objective": 161473100
+        },
+        {
+          "stage": "seat_utilization_1",
+          "status": "OPTIMAL",
+          "wall_time_s": 45.25,
+          "objective": 0
+        }
+      ]
+    },
+    {
+      "epoch": 20,
+      "pool_size": 8478,
+      "new_patterns": 134,
+      "improved": false,
+      "optimal_within_pool": true,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "OPTIMAL",
+          "wall_time_s": 4.594,
+          "objective": 20751
+        },
+        {
+          "stage": "total_person_intransit",
+          "status": "OPTIMAL",
+          "wall_time_s": 20.86,
+          "objective": 248493
+        },
+        {
+          "stage": "total_fuel_scaled",
+          "status": "OPTIMAL",
+          "wall_time_s": 24.515,
+          "objective": 161473100
+        },
+        {
+          "stage": "seat_utilization_1",
+          "status": "OPTIMAL",
+          "wall_time_s": 50.672,
+          "objective": 0
+        }
+      ]
+    }
+  ],
+  "elapsed_s": 1873.641,
+  "routes_out": "D:\\Bedbedrock\\Python\\NewTest\\docs\\reference_formats\\q2-routes.csv",
+  "assignments_out": "D:\\Bedbedrock\\Python\\NewTest\\docs\\reference_formats\\q2-assignments.csv"
+}

@@ -1,0 +1,344 @@
+{
+  "algorithm": "Q3 time-window route pool + fleet interval scheduling + LNS",
+  "python": "3.11.9",
+  "people": 4000,
+  "mandatory_people": 3840,
+  "temporary_people": 160,
+  "fleet_size": 24,
+  "stage1_baseline_aircraft_time_min": 32887,
+  "final_metrics": {
+    "temporary_served": 154,
+    "temporary_service_rate": 0.9625,
+    "total_aircraft_time_min": 32887,
+    "total_person_intransit_min": 269475,
+    "sorties": 164,
+    "total_fuel_kg": 247971.7,
+    "seat_utilization": 0.5465488627451994
+  },
+  "objective_order_stage1": [
+    "total_aircraft_time_min",
+    "total_person_intransit_min",
+    "sorties",
+    "total_fuel_kg",
+    "seat_utilization_max"
+  ],
+  "objective_order_stage2": [
+    "temporary_served_max",
+    "total_aircraft_time_min",
+    "total_person_intransit_min",
+    "sorties",
+    "total_fuel_kg",
+    "seat_utilization_max"
+  ],
+  "route_pool_size": 10832,
+  "route_pool_limits": {
+    "hard_limit": 15000,
+    "stage1_soft_limit": 10500,
+    "stage2_bootstrap_soft_limit": 13500,
+    "final_remaining_capacity": 4168
+  },
+  "stage1_stop_reason": "configured_epochs_completed",
+  "stage2_stop_reason": "no_new_patterns",
+  "route_factory_calls": 10388,
+  "route_factory_cache_hits": 3106,
+  "stage1_history": [
+    {
+      "epoch": 0,
+      "pool_size": 5106,
+      "metrics": {
+        "temporary_served": 0,
+        "aircraft_time": 52314,
+        "person_intransit": 248981,
+        "sorties": 282,
+        "fuel_kg": 415593.09999999986,
+        "pass_km": 809392.0,
+        "avail_km": 2474835.0
+      },
+      "pool_optimal": false,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "FEASIBLE",
+          "wall_time_s": 180.407,
+          "objective": 52314
+        }
+      ]
+    },
+    {
+      "epoch": 1,
+      "pool_size": 6077,
+      "new_patterns": 937,
+      "accepted": true,
+      "metrics": {
+        "temporary_served": 0,
+        "aircraft_time": 44576,
+        "person_intransit": 255113,
+        "sorties": 234,
+        "fuel_kg": 349429.5,
+        "pass_km": 815287.0,
+        "avail_km": 2100485.0
+      },
+      "pool_optimal": false,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "FEASIBLE",
+          "wall_time_s": 180.281,
+          "objective": 44576
+        }
+      ]
+    },
+    {
+      "epoch": 2,
+      "pool_size": 6517,
+      "new_patterns": 392,
+      "accepted": true,
+      "metrics": {
+        "temporary_served": 0,
+        "aircraft_time": 36901,
+        "person_intransit": 255674,
+        "sorties": 188,
+        "fuel_kg": 281682.0,
+        "pass_km": 808412.0,
+        "avail_km": 1738782.0
+      },
+      "pool_optimal": false,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "FEASIBLE",
+          "wall_time_s": 180.391,
+          "objective": 36901
+        }
+      ]
+    },
+    {
+      "epoch": 3,
+      "pool_size": 6677,
+      "new_patterns": 120,
+      "accepted": true,
+      "metrics": {
+        "temporary_served": 0,
+        "aircraft_time": 33963,
+        "person_intransit": 256566,
+        "sorties": 172,
+        "fuel_kg": 259264.19999999992,
+        "pass_km": 808618.0,
+        "avail_km": 1594491.0
+      },
+      "pool_optimal": false,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "FEASIBLE",
+          "wall_time_s": 180.438,
+          "objective": 33963
+        }
+      ]
+    },
+    {
+      "epoch": 4,
+      "pool_size": 6725,
+      "new_patterns": 24,
+      "accepted": true,
+      "metrics": {
+        "temporary_served": 0,
+        "aircraft_time": 33297,
+        "person_intransit": 254912,
+        "sorties": 167,
+        "fuel_kg": 253261.2,
+        "pass_km": 806250.0,
+        "avail_km": 1558528.0
+      },
+      "pool_optimal": false,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "FEASIBLE",
+          "wall_time_s": 180.375,
+          "objective": 33297
+        }
+      ]
+    },
+    {
+      "epoch": 5,
+      "pool_size": 6765,
+      "new_patterns": 7,
+      "accepted": true,
+      "metrics": {
+        "temporary_served": 0,
+        "aircraft_time": 32980,
+        "person_intransit": 255296,
+        "sorties": 165,
+        "fuel_kg": 249387.19999999998,
+        "pass_km": 806890.0,
+        "avail_km": 1548608.0
+      },
+      "pool_optimal": false,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "FEASIBLE",
+          "wall_time_s": 180.406,
+          "objective": 32980
+        }
+      ]
+    },
+    {
+      "epoch": 6,
+      "pool_size": 6821,
+      "new_patterns": 5,
+      "accepted": true,
+      "metrics": {
+        "temporary_served": 0,
+        "aircraft_time": 32887,
+        "person_intransit": 258197,
+        "sorties": 164,
+        "fuel_kg": 248701.1,
+        "pass_km": 809389.0,
+        "avail_km": 1544675.0
+      },
+      "pool_optimal": false,
+      "stages": [
+        {
+          "stage": "total_aircraft_time",
+          "status": "OPTIMAL",
+          "wall_time_s": 171.359,
+          "objective": 32887
+        },
+        {
+          "stage": "total_person_intransit",
+          "status": "UNKNOWN",
+          "wall_time_s": 8.719
+        }
+      ]
+    }
+  ],
+  "stage2_history": [
+    {
+      "epoch": 0,
+      "pool_size": 8420,
+      "metrics": {
+        "temporary_served": 95,
+        "aircraft_time": 32887,
+        "person_intransit": 265190,
+        "sorties": 164,
+        "fuel_kg": 248696.09999999995,
+        "pass_km": 831551.0,
+        "avail_km": 1544643.0
+      },
+      "pool_optimal": false,
+      "stages": [
+        {
+          "stage": "temporary_served",
+          "status": "FEASIBLE",
+          "wall_time_s": 180.5,
+          "objective": 95
+        }
+      ]
+    },
+    {
+      "epoch": 1,
+      "pool_size": 9720,
+      "new_patterns": 1286,
+      "accepted": true,
+      "metrics": {
+        "temporary_served": 145,
+        "aircraft_time": 32887,
+        "person_intransit": 269110,
+        "sorties": 164,
+        "fuel_kg": 247969.19999999998,
+        "pass_km": 843264.0,
+        "avail_km": 1546735.0
+      },
+      "pool_optimal": false,
+      "stages": [
+        {
+          "stage": "temporary_served",
+          "status": "FEASIBLE",
+          "wall_time_s": 180.64,
+          "objective": 145
+        }
+      ]
+    },
+    {
+      "epoch": 2,
+      "pool_size": 10412,
+      "new_patterns": 677,
+      "accepted": true,
+      "metrics": {
+        "temporary_served": 154,
+        "aircraft_time": 32887,
+        "person_intransit": 269542,
+        "sorties": 164,
+        "fuel_kg": 247971.69999999998,
+        "pass_km": 845460.0,
+        "avail_km": 1546751.0
+      },
+      "pool_optimal": false,
+      "stages": [
+        {
+          "stage": "temporary_served",
+          "status": "FEASIBLE",
+          "wall_time_s": 180.703,
+          "objective": 154
+        }
+      ]
+    },
+    {
+      "epoch": 3,
+      "pool_size": 10735,
+      "new_patterns": 314,
+      "accepted": true,
+      "metrics": {
+        "temporary_served": 154,
+        "aircraft_time": 32887,
+        "person_intransit": 269475,
+        "sorties": 164,
+        "fuel_kg": 247971.69999999995,
+        "pass_km": 845375.0,
+        "avail_km": 1546751.0
+      },
+      "pool_optimal": false,
+      "stages": [
+        {
+          "stage": "temporary_served",
+          "status": "FEASIBLE",
+          "wall_time_s": 180.703,
+          "objective": 154
+        }
+      ]
+    },
+    {
+      "epoch": 4,
+      "pool_size": 10826,
+      "new_patterns": 60,
+      "accepted": false,
+      "metrics": {
+        "temporary_served": 154,
+        "aircraft_time": 32887,
+        "person_intransit": 271509,
+        "sorties": 164,
+        "fuel_kg": 247971.69999999995,
+        "pass_km": 848867.0,
+        "avail_km": 1546751.0
+      },
+      "pool_optimal": false,
+      "stages": [
+        {
+          "stage": "temporary_served",
+          "status": "FEASIBLE",
+          "wall_time_s": 180.766,
+          "objective": 154
+        }
+      ]
+    }
+  ],
+  "claim_scope": "best valid solution found; exact claims apply only to solved stages over generated pool",
+  "original_problem_global_optimum_claimed": false,
+  "configured_time_limit_s": 3600.0,
+  "elapsed_s": 2443.5,
+  "unused_time_budget_s": 1156.5,
+  "routes_out": "D:\\Bedbedrock\\Python\\NewTest\\docs\\reference_formats\\q3-routes.csv",
+  "assignments_out": "D:\\Bedbedrock\\Python\\NewTest\\docs\\reference_formats\\q3-assignments.csv"
+}
