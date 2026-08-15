@@ -35,6 +35,19 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+import matplotlib
+import numpy as np
+import pandas as pd
+
+# 兼容旧版Matplotlib与新版NumPy组合。
+if not hasattr(np, "row_stack"):
+    np.row_stack = np.vstack
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
+from openpyxl.styles import Alignment, Font, PatternFill
+
 try:
     from ortools.sat.python import cp_model
 except ImportError as exc:  # pragma: no cover
@@ -56,6 +69,8 @@ OUTPUT_DIR = BASE_DIR / "docs" / "reference_formats"
 ROUTES_OUT = OUTPUT_DIR / "q3-routes.csv"
 ASSIGN_OUT = OUTPUT_DIR / "q3-assignments.csv"
 SUMMARY_OUT = OUTPUT_DIR / "q3-summary.json"
+FIGURES_DIR = BASE_DIR / "outputs" / "figures"
+TABLES_DIR = BASE_DIR / "outputs" / "tables"
 
 HORIZON_START = datetime(2026, 8, 3, 0, 0)
 PLANNING_DAYS = 7
@@ -1593,6 +1608,585 @@ def write_outputs(
                 writer.writerow([person.person_id, *assignment])
 
 
+def configure_chinese_plot() -> None:
+    """配置论文图使用的中文字体。"""
+    plt.rcParams["font.sans-serif"] = [
+        "Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "DejaVu Sans",
+    ]
+    plt.rcParams["axes.unicode_minus"] = False
+    plt.rcParams["savefig.dpi"] = 300
+
+
+def report_path(path: Path) -> Path:
+    """相对路径统一相对于项目根目录。"""
+    path = Path(path)
+    return path if path.is_absolute() else BASE_DIR / path
+
+
+def demand_kind(person: Person) -> str:
+    """划分出海、海返和设施穿梭需求。"""
+    land_nodes = AIRPORT_SET | {LAND}
+    if person.origin in land_nodes and person.destination not in land_nodes:
+        return "出海"
+    if person.origin not in land_nodes and person.destination in land_nodes:
+        return "海返"
+    if person.origin not in land_nodes and person.destination not in land_nodes:
+        return "设施穿梭"
+    return "陆地间"
+
+
+def window_service_days(person: Person) -> int:
+    """统计时间窗与每日运行区间相交的日期数。"""
+    count = 0
+    for day in range(PLANNING_DAYS):
+        lower = max(person.earliest, day * DAY_MINUTES + TAKEOFF_OPEN)
+        upper = min(person.latest, day * DAY_MINUTES + RETURN_CLOSE)
+        count += int(lower <= upper)
+    return count
+
+
+def read_result_frames(
+    routes_path: Path,
+    assignments_path: Path,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """读取现存排班结果，不调用优化器。"""
+    routes = pd.read_csv(routes_path, encoding="utf-8-sig")
+    assignments = pd.read_csv(assignments_path, encoding="utf-8-sig")
+    route_columns = {
+        "aircraft_id", "flight_no", "stop_order", "facility_id",
+        "arrival_time", "departure_time", "refuel",
+    }
+    assignment_columns = {
+        "person_id", "aircraft_id", "flight_no",
+        "pickup_stop_order", "delivery_stop_order",
+    }
+    if not route_columns.issubset(routes.columns):
+        raise ValueError("q3-routes.csv字段不完整")
+    if not assignment_columns.issubset(assignments.columns):
+        raise ValueError("q3-assignments.csv字段不完整")
+    routes["flight_no"] = routes["flight_no"].astype(int)
+    routes["stop_order"] = routes["stop_order"].astype(int)
+    routes["refuel"] = routes["refuel"].fillna(0).astype(int)
+    routes["arrival_dt"] = pd.to_datetime(routes["arrival_time"], errors="coerce")
+    routes["departure_dt"] = pd.to_datetime(routes["departure_time"], errors="coerce")
+    served = assignments.dropna(subset=[
+        "aircraft_id", "flight_no", "pickup_stop_order", "delivery_stop_order",
+    ]).copy()
+    for column in ("flight_no", "pickup_stop_order", "delivery_stop_order"):
+        served[column] = served[column].astype(int)
+    return routes, served
+
+
+def rebuild_flight_analysis(
+    routes: pd.DataFrame,
+    served_assignments: pd.DataFrame,
+    people: Sequence[Person],
+) -> pd.DataFrame:
+    """由结果CSV重建逐架次时间、载客、燃油和利用率。"""
+    people_by_id = {person.person_id: person for person in people}
+    rows = []
+    for (aircraft_id, flight_no), group in routes.groupby(
+        ["aircraft_id", "flight_no"], sort=True,
+    ):
+        stops = group.sort_values("stop_order").reset_index(drop=True)
+        orders = stops["stop_order"].tolist()
+        if orders != list(range(len(stops))):
+            raise ValueError(f"架次停靠序号不连续：{aircraft_id}-{flight_no}")
+        nodes = stops["facility_id"].astype(str).tolist()
+        if nodes[0] != nodes[-1]:
+            raise ValueError(f"架次未返回原机场：{aircraft_id}-{flight_no}")
+        start_dt = stops.iloc[0]["departure_dt"]
+        return_dt = stops.iloc[-1]["arrival_dt"]
+        if pd.isna(start_dt) or pd.isna(return_dt):
+            raise ValueError(f"架次首尾时刻缺失：{aircraft_id}-{flight_no}")
+        aircraft_info = AIRCRAFT_INFO.get(str(aircraft_id))
+        if aircraft_info is None:
+            raise ValueError(f"未知具体飞机：{aircraft_id}")
+        airport, aircraft_type = aircraft_info
+        if airport != nodes[0]:
+            raise ValueError(f"具体飞机与起飞机场不一致：{aircraft_id}-{flight_no}")
+        leg_distances = [D[nodes[index]][nodes[index + 1]] for index in range(len(nodes) - 1)]
+        assignment_group = served_assignments[
+            (served_assignments["aircraft_id"] == aircraft_id)
+            & (served_assignments["flight_no"] == flight_no)
+        ]
+        loads = np.zeros(len(leg_distances), dtype=int)
+        person_intransit = 0
+        route_people = []
+        arrivals = stops.set_index("stop_order")["arrival_dt"].to_dict()
+        departures = stops.set_index("stop_order")["departure_dt"].to_dict()
+        for assignment in assignment_group.itertuples(index=False):
+            person = people_by_id.get(str(assignment.person_id))
+            if person is None:
+                raise ValueError(f"结果含未知人员：{assignment.person_id}")
+            pickup = int(assignment.pickup_stop_order)
+            delivery = int(assignment.delivery_stop_order)
+            if not 0 <= pickup < delivery < len(nodes):
+                raise ValueError(f"上下机序号非法：{assignment.person_id}")
+            loads[pickup:delivery] += 1
+            pickup_time = departures.get(pickup)
+            delivery_time = arrivals.get(delivery)
+            if pd.isna(pickup_time) or pd.isna(delivery_time):
+                raise ValueError(f"人员上下机时刻缺失：{assignment.person_id}")
+            person_intransit += int((delivery_time - pickup_time).total_seconds() // 60)
+            route_people.append(person)
+        duration = int((return_dt - start_dt).total_seconds() // 60)
+        pass_km = float(np.dot(loads, np.asarray(leg_distances)))
+        avail_km = float(AC[aircraft_type]["seats"] * sum(leg_distances))
+        day_index = int((start_dt.to_pydatetime() - HORIZON_START).total_seconds() // 60) // DAY_MINUTES
+        rows.append({
+            "aircraft_id": str(aircraft_id),
+            "flight_no": int(flight_no),
+            "date": start_dt.strftime("%Y-%m-%d"),
+            "day_index": day_index,
+            "airport": airport,
+            "aircraft_type": aircraft_type,
+            "start_minute": int((start_dt.to_pydatetime() - HORIZON_START).total_seconds() // 60),
+            "return_minute": int((return_dt.to_pydatetime() - HORIZON_START).total_seconds() // 60),
+            "turnaround_end_minute": int((return_dt.to_pydatetime() - HORIZON_START).total_seconds() // 60) + TURNAROUND,
+            "departure_time": start_dt,
+            "return_time": return_dt,
+            "aircraft_time_min": duration,
+            "person_intransit_min": person_intransit,
+            "people_count": len(route_people),
+            "mandatory_count": sum(person.mandatory for person in route_people),
+            "temporary_count": sum(not person.mandatory for person in route_people),
+            "fuel_kg": float(AC[aircraft_type]["burn"] * sum(leg_distances)),
+            "pass_km": pass_km,
+            "avail_km": avail_km,
+            "seat_utilization": pass_km / avail_km if avail_km > EPS else 0.0,
+            "sea_landings": len(nodes) - 2,
+            "refuel_count": int(stops.iloc[1:-1]["refuel"].sum()),
+            "has_shuttle": any(demand_kind(person) == "设施穿梭" for person in route_people),
+        })
+    return pd.DataFrame(rows)
+
+
+def verify_rebuilt_metrics(
+    flights: pd.DataFrame,
+    served_assignments: pd.DataFrame,
+    people: Sequence[Person],
+    summary: dict,
+) -> None:
+    """核对CSV复算指标与上次summary记录一致。"""
+    people_by_id = {person.person_id: person for person in people}
+    temporary_served = sum(
+        not people_by_id[str(person_id)].mandatory
+        for person_id in served_assignments["person_id"]
+    )
+    pass_km = float(flights["pass_km"].sum())
+    avail_km = float(flights["avail_km"].sum())
+    actual = {
+        "temporary_served": temporary_served,
+        "total_aircraft_time_min": int(flights["aircraft_time_min"].sum()),
+        "total_person_intransit_min": int(flights["person_intransit_min"].sum()),
+        "sorties": len(flights),
+        "total_fuel_kg": float(flights["fuel_kg"].sum()),
+        "seat_utilization": pass_km / avail_km if avail_km > EPS else 0.0,
+    }
+    expected = summary.get("final_metrics", {})
+    for key, value in actual.items():
+        if key not in expected:
+            continue
+        tolerance = 1.0e-5 if isinstance(value, float) else 0
+        if abs(float(value) - float(expected[key])) > tolerance:
+            raise ValueError(
+                f"结果文件与summary不一致：{key}, CSV复算={value}, JSON={expected[key]}"
+            )
+
+
+def build_parameter_table(args: argparse.Namespace) -> pd.DataFrame:
+    """记录本次最优结果对应的搜索参数。"""
+    rows = [
+        ("time-limit", "总搜索时间/s", args.time_limit),
+        ("stage1-fraction", "阶段一时间比例", args.stage1_fraction),
+        ("master-time", "单次Master时间/s", args.master_time),
+        ("epochs", "阶段一LNS轮数", args.epochs),
+        ("temp-epochs", "阶段二LNS轮数", args.temp_epochs),
+        ("ops-per-epoch", "每轮重分包次数", args.ops_per_epoch),
+        ("neighbors", "路线邻居数", args.neighbors),
+        ("bootstrap-neighbors", "初始合并邻居数", args.bootstrap_neighbors),
+        ("bootstrap-triples", "三路线合并尝试数", args.bootstrap_triples),
+        ("temp-candidates-per-route", "每条路线临时人员候选数", args.temp_candidates_per_route),
+        ("route-variants", "每个人员组合保留路线数", args.route_variants),
+        ("max-patterns", "路线池上限", args.max_patterns),
+        ("stage1-pool-fraction", "阶段一路线池比例", args.stage1_pool_fraction),
+        ("stage2-bootstrap-pool-fraction", "阶段二初始路线池比例", args.stage2_bootstrap_pool_fraction),
+        ("max-route-people", "单次Oracle最大候选人数", args.max_route_people),
+        ("assignment-limit", "上下机方案枚举上限", args.assignment_limit),
+        ("workers", "并行工作线程数", args.workers),
+        ("seed", "随机种子（未显式输入时为默认值）", args.seed),
+    ]
+    return pd.DataFrame(rows, columns=["参数", "含义", "本次取值"])
+
+
+def build_demand_window_table(people: Sequence[Person]) -> pd.DataFrame:
+    """按任务类型统计需求与时间窗。"""
+    rows = []
+    for task_type in ("emergency", "production", "shift", "temporary"):
+        group = [person for person in people if person.task_type == task_type]
+        widths = np.asarray([person.latest - person.earliest for person in group], dtype=float)
+        kinds = Counter(demand_kind(person) for person in group)
+        service_days = [window_service_days(person) for person in group]
+        rows.append({
+            "任务类型": task_type,
+            "人数": len(group),
+            "OD类别数": len({person.od for person in group}),
+            "平均时间窗宽度/min": float(np.mean(widths)),
+            "最小时间窗宽度/min": float(np.min(widths)),
+            "中位时间窗宽度/min": float(np.median(widths)),
+            "最大时间窗宽度/min": float(np.max(widths)),
+            "出海人数": kinds["出海"],
+            "海返人数": kinds["海返"],
+            "设施穿梭人数": kinds["设施穿梭"],
+            "平均可服务日期数": float(np.mean(service_days)),
+            "紧时间窗人数(不超过180min)": int(np.sum(widths <= 180)),
+        })
+    return pd.DataFrame(rows)
+
+
+def max_concurrent_aircraft(group: pd.DataFrame) -> int:
+    """计算包含30分钟周转的最大同时占用飞机数。"""
+    events = []
+    for row in group.itertuples(index=False):
+        events.append((int(row.start_minute), 1))
+        events.append((int(row.turnaround_end_minute), -1))
+    active = maximum = 0
+    for _, delta in sorted(events, key=lambda item: (item[0], item[1])):
+        active += delta
+        maximum = max(maximum, active)
+    return maximum
+
+
+def build_daily_fleet_table(flights: pd.DataFrame) -> pd.DataFrame:
+    """按日期、机场和机型汇总机队运行。"""
+    rows = []
+    for day in range(PLANNING_DAYS):
+        date = (HORIZON_START + timedelta(days=day)).strftime("%Y-%m-%d")
+        for airport in AIRPORTS:
+            for aircraft_type in AC:
+                group = flights[
+                    (flights["day_index"] == day)
+                    & (flights["airport"] == airport)
+                    & (flights["aircraft_type"] == aircraft_type)
+                ]
+                aircraft_count = FLEET_COUNTS[airport][aircraft_type]
+                task_time = float(group["aircraft_time_min"].sum())
+                pass_km = float(group["pass_km"].sum())
+                avail_km = float(group["avail_km"].sum())
+                rows.append({
+                    "日期": date,
+                    "机场": airport,
+                    "机型": aircraft_type,
+                    "飞机数量": aircraft_count,
+                    "架次数": len(group),
+                    "飞行任务时间/min": task_time,
+                    "平均每架飞机任务时间/min": task_time / aircraft_count,
+                    "运输人数": int(group["people_count"].sum()),
+                    "燃油/kg": float(group["fuel_kg"].sum()),
+                    "平均座位利用率": pass_km / avail_km if avail_km > EPS else 0.0,
+                    "最早起飞": group["departure_time"].min().strftime("%H:%M") if len(group) else "",
+                    "最晚返场": group["return_time"].max().strftime("%H:%M") if len(group) else "",
+                    "最大同时占用飞机数": max_concurrent_aircraft(group) if len(group) else 0,
+                })
+    return pd.DataFrame(rows)
+
+
+def build_route_structure_table(flights: pd.DataFrame) -> pd.DataFrame:
+    """按海上着陆次数统计架次结构。"""
+    rows = []
+    total = len(flights)
+    for landings in range(1, MAX_LANDINGS + 1):
+        group = flights[flights["sea_landings"] == landings]
+        rows.append({
+            "海上着陆次数": landings,
+            "架次数": len(group),
+            "占比": len(group) / total if total else 0.0,
+            "平均运输人数": float(group["people_count"].mean()) if len(group) else 0.0,
+            "平均飞机时间/min": float(group["aircraft_time_min"].mean()) if len(group) else 0.0,
+            "平均人员在途时间/min": float(group["person_intransit_min"].mean()) if len(group) else 0.0,
+            "平均座位利用率": float(group["seat_utilization"].mean()) if len(group) else 0.0,
+            "加油架次数": int((group["refuel_count"] > 0).sum()) if len(group) else 0,
+            "含设施穿梭任务架次数": int(group["has_shuttle"].sum()) if len(group) else 0,
+        })
+    return pd.DataFrame(rows)
+
+
+def write_analysis_workbook(
+    args: argparse.Namespace,
+    people: Sequence[Person],
+    flights: pd.DataFrame,
+    tables_dir: Path,
+) -> Path:
+    """生成包含四张统计表的Excel工作簿。"""
+    tables_dir.mkdir(parents=True, exist_ok=True)
+    output = tables_dir / "q3_analysis_tables.xlsx"
+    tables = {
+        "参数设置": build_parameter_table(args),
+        "数据与时间窗统计": build_demand_window_table(people),
+        "每日机场机队运行统计": build_daily_fleet_table(flights),
+        "架次结构统计": build_route_structure_table(flights),
+    }
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        for sheet_name, frame in tables.items():
+            frame.to_excel(writer, sheet_name=sheet_name, index=False)
+            sheet = writer.sheets[sheet_name]
+            sheet.freeze_panes = "A2"
+            sheet.auto_filter.ref = sheet.dimensions
+            sheet.sheet_view.showGridLines = False
+            for cell in sheet[1]:
+                cell.font = Font(name="Microsoft YaHei", bold=True, color="FFFFFF")
+                cell.fill = PatternFill(fill_type="solid", fgColor="4472C4")
+                cell.alignment = Alignment(horizontal="center")
+            for column in sheet.columns:
+                width = max(len(str(cell.value or "")) for cell in column) + 2
+                sheet.column_dimensions[column[0].column_letter].width = min(max(width, 10), 30)
+            for row in sheet.iter_rows(min_row=2):
+                for cell in row:
+                    if isinstance(cell.value, float):
+                        cell.number_format = "0.0000"
+            for header in ("占比", "平均座位利用率"):
+                if header in frame.columns:
+                    column_index = list(frame.columns).index(header) + 1
+                    for row_index in range(2, len(frame) + 2):
+                        sheet.cell(row_index, column_index).number_format = "0.00%"
+    return output
+
+
+def plot_two_stage_convergence(summary: dict, figures_dir: Path) -> Path:
+    """绘制两阶段最优值和路线池规模。"""
+    fig, axes = plt.subplots(2, 1, figsize=(10, 8), constrained_layout=True)
+    settings = [
+        ("stage1_history", "aircraft_time", "总飞机使用时间/min", "#4C78A8"),
+        ("stage2_history", "temporary_served", "临时人员完成数", "#E45756"),
+    ]
+    for axis, (history_name, metric, ylabel, color) in zip(axes, settings):
+        history = summary.get(history_name, [])
+        epochs = np.asarray([item.get("epoch", index) for index, item in enumerate(history)])
+        values = np.asarray([
+            item.get("metrics", {}).get(metric, 0) for item in history
+        ], dtype=float)
+        pools = np.asarray([item.get("pool_size", 0) for item in history], dtype=float)
+        if len(values):
+            values = (
+                np.minimum.accumulate(values)
+                if history_name == "stage1_history"
+                else np.maximum.accumulate(values)
+            )
+        axis.plot(epochs, values, marker="o", linewidth=2, color=color, label=ylabel)
+        axis.set_xlabel("epoch")
+        axis.set_ylabel(ylabel)
+        axis.grid(linestyle=":", alpha=0.35)
+        pool_axis = axis.twinx()
+        pool_axis.plot(
+            epochs, pools, color="#8C8C8C", linestyle="--",
+            linewidth=1.4, alpha=0.7, label="路线池规模",
+        )
+        pool_axis.set_ylabel("路线池规模")
+        first_handles, first_labels = axis.get_legend_handles_labels()
+        second_handles, second_labels = pool_axis.get_legend_handles_labels()
+        axis.legend(
+            first_handles + second_handles, first_labels + second_labels,
+            loc="best", frameon=False,
+        )
+    output = figures_dir / "q3_two_stage_convergence.png"
+    fig.savefig(output, bbox_inches="tight")
+    plt.close(fig)
+    return output
+
+
+def plot_aircraft_gantt(flights: pd.DataFrame, figures_dir: Path) -> Path:
+    """按日期绘制具体飞机任务和周转时间。"""
+    colors = {"T1": "#4C78A8", "T2": "#F58518", "T3": "#54A24B"}
+    aircraft_ids = [aircraft_id for aircraft_id, _, _ in FLEET]
+    positions = {aircraft_id: index for index, aircraft_id in enumerate(aircraft_ids)}
+    fig, axes = plt.subplots(
+        PLANNING_DAYS, 1, figsize=(18, 25), sharex=True, sharey=True,
+        constrained_layout=True,
+    )
+    for day, axis in enumerate(np.atleast_1d(axes)):
+        group = flights[flights["day_index"] == day]
+        for row in group.itertuples(index=False):
+            y = positions[row.aircraft_id]
+            start_hour = (row.start_minute - day * DAY_MINUTES) / 60.0
+            duration_hour = row.aircraft_time_min / 60.0
+            axis.barh(
+                y, duration_hour, left=start_hour, height=0.65,
+                color=colors[row.aircraft_type], edgecolor="white", linewidth=0.4,
+            )
+            axis.barh(
+                y, TURNAROUND / 60.0, left=start_hour + duration_hour,
+                height=0.65, color=colors[row.aircraft_type], alpha=0.20,
+                edgecolor="none",
+            )
+        date_label = (HORIZON_START + timedelta(days=day)).strftime("%m-%d")
+        axis.text(0.995, 0.93, date_label, transform=axis.transAxes, ha="right", va="top")
+        axis.set_yticks(range(len(aircraft_ids)))
+        axis.set_yticklabels(aircraft_ids, fontsize=7)
+        axis.set_xlim(5.8, 20.6)
+        axis.grid(axis="x", linestyle=":", alpha=0.35)
+        axis.invert_yaxis()
+    axes[-1].set_xlabel("时刻/h")
+    axes[-1].set_xticks(range(6, 21, 2))
+    legend = [Patch(facecolor=colors[key], label=key) for key in ("T1", "T2", "T3")]
+    legend.append(Patch(facecolor="#8C8C8C", alpha=0.20, label="30分钟周转"))
+    fig.legend(handles=legend, loc="upper center", ncol=4, frameon=False)
+    output = figures_dir / "q3_aircraft_gantt.png"
+    fig.savefig(output, bbox_inches="tight")
+    plt.close(fig)
+    return output
+
+
+def plot_daily_airport_workload(flights: pd.DataFrame, figures_dir: Path) -> Path:
+    """绘制各日期、机场和机型的飞机使用时间。"""
+    airport_colors = {"A01": "#4C78A8", "A02": "#F58518", "A03": "#54A24B"}
+    type_hatches = {"T1": "", "T2": "//", "T3": "xx"}
+    dates = [
+        (HORIZON_START + timedelta(days=day)).strftime("%m-%d")
+        for day in range(PLANNING_DAYS)
+    ]
+    x = np.arange(PLANNING_DAYS)
+    bottom = np.zeros(PLANNING_DAYS)
+    fig, axis = plt.subplots(figsize=(11, 6), constrained_layout=True)
+    for airport in AIRPORTS:
+        for aircraft_type in AC:
+            values = np.asarray([
+                flights[
+                    (flights["day_index"] == day)
+                    & (flights["airport"] == airport)
+                    & (flights["aircraft_type"] == aircraft_type)
+                ]["aircraft_time_min"].sum() / 60.0
+                for day in range(PLANNING_DAYS)
+            ])
+            axis.bar(
+                x, values, bottom=bottom, width=0.72,
+                color=airport_colors[airport], hatch=type_hatches[aircraft_type],
+                edgecolor="white", linewidth=0.5,
+            )
+            bottom += values
+    axis.set_xticks(x)
+    axis.set_xticklabels(dates)
+    axis.set_xlabel("日期")
+    axis.set_ylabel("总飞机使用时间/h")
+    axis.grid(axis="y", linestyle=":", alpha=0.35)
+    airport_legend = [Patch(facecolor=airport_colors[key], label=key) for key in AIRPORTS]
+    type_legend = [
+        Patch(facecolor="white", edgecolor="#555555", hatch=type_hatches[key], label=key)
+        for key in AC
+    ]
+    first_legend = axis.legend(handles=airport_legend, loc="upper left", frameon=False)
+    axis.add_artist(first_legend)
+    axis.legend(handles=type_legend, loc="upper right", frameon=False)
+    output = figures_dir / "q3_daily_airport_workload.png"
+    fig.savefig(output, bbox_inches="tight")
+    plt.close(fig)
+    return output
+
+
+def plot_route_structure(flights: pd.DataFrame, figures_dir: Path) -> Path:
+    """绘制着陆次数和单架次座位利用率分布。"""
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
+    counts = [int((flights["sea_landings"] == value).sum()) for value in range(1, 6)]
+    axes[0].bar(range(1, 6), counts, color="#4C78A8", width=0.7)
+    axes[0].set_xlabel("海上着陆次数")
+    axes[0].set_ylabel("架次数")
+    axes[0].set_xticks(range(1, 6))
+    axes[0].grid(axis="y", linestyle=":", alpha=0.35)
+    axes[1].hist(
+        flights["seat_utilization"].to_numpy(dtype=float) * 100,
+        bins=np.linspace(0, 100, 11), color="#F58518", edgecolor="white",
+    )
+    axes[1].set_xlabel("单架次座位利用率/%")
+    axes[1].set_ylabel("架次数")
+    axes[1].grid(axis="y", linestyle=":", alpha=0.35)
+    output = figures_dir / "q3_route_structure.png"
+    fig.savefig(output, bbox_inches="tight")
+    plt.close(fig)
+    return output
+
+
+def plot_temporary_service_analysis(
+    served_assignments: pd.DataFrame,
+    people: Sequence[Person],
+    figures_dir: Path,
+) -> Path:
+    """比较已完成和未完成临时人员的时间窗。"""
+    served_ids = set(served_assignments["person_id"].astype(str))
+    temporary = [person for person in people if not person.mandatory]
+    groups = {
+        "已完成": [person for person in temporary if person.person_id in served_ids],
+        "未完成": [person for person in temporary if person.person_id not in served_ids],
+    }
+    colors = {"已完成": "#54A24B", "未完成": "#E45756"}
+    all_widths = [(person.latest - person.earliest) / 60.0 for person in temporary]
+    maximum = max(max(all_widths, default=1.0), 1.0e-6)
+    bins = np.linspace(0, maximum, min(16, max(6, len(temporary) // 12 + 1)))
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
+    for label, group in groups.items():
+        if not group:
+            continue
+        widths = [(person.latest - person.earliest) / 60.0 for person in group]
+        axes[0].hist(
+            widths, bins=bins, alpha=0.55, color=colors[label],
+            edgecolor="white", label=f"{label}（{len(group)}人）",
+        )
+        axes[1].scatter(
+            [person.earliest / DAY_MINUTES for person in group],
+            [person.latest / DAY_MINUTES for person in group],
+            s=25, alpha=0.68, color=colors[label],
+            label=f"{label}（{len(group)}人）",
+        )
+    axes[0].set_xlabel("时间窗宽度/h")
+    axes[0].set_ylabel("临时人员数")
+    axes[0].grid(axis="y", linestyle=":", alpha=0.35)
+    axes[1].set_xlabel("最早可离开时刻/规划日")
+    axes[1].set_ylabel("最晚到达时刻/规划日")
+    axes[1].grid(linestyle=":", alpha=0.35)
+    for axis in axes:
+        handles, labels = axis.get_legend_handles_labels()
+        if handles:
+            axis.legend(frameon=False)
+    output = figures_dir / "q3_temporary_service_analysis.png"
+    fig.savefig(output, bbox_inches="tight")
+    plt.close(fig)
+    return output
+
+
+def generate_reports_from_existing(args: argparse.Namespace) -> Tuple[Path, List[Path]]:
+    """只读取现存结果，生成论文表格和图片。"""
+    dist_path = report_path(args.dist or args.data_dir / "distances.csv")
+    demand_path = report_path(args.demand or args.data_dir / "peopleQ3.csv")
+    routes_path = report_path(args.routes_out)
+    assignments_path = report_path(args.assign_out)
+    summary_path = report_path(args.summary_out)
+    for path in (dist_path, demand_path, routes_path, assignments_path, summary_path):
+        if not path.exists():
+            raise FileNotFoundError(f"报告所需文件不存在：{path}")
+    load_distances(dist_path)
+    people = load_people(demand_path)
+    routes, served_assignments = read_result_frames(routes_path, assignments_path)
+    with summary_path.open("r", encoding="utf-8") as stream:
+        summary = json.load(stream)
+    flights = rebuild_flight_analysis(routes, served_assignments, people)
+    verify_rebuilt_metrics(flights, served_assignments, people, summary)
+    figures_dir = report_path(args.figures_dir)
+    tables_dir = report_path(args.tables_dir)
+    figures_dir.mkdir(parents=True, exist_ok=True)
+    configure_chinese_plot()
+    workbook = write_analysis_workbook(args, people, flights, tables_dir)
+    figures = [
+        plot_two_stage_convergence(summary, figures_dir),
+        plot_aircraft_gantt(flights, figures_dir),
+        plot_daily_airport_workload(flights, figures_dir),
+        plot_route_structure(flights, figures_dir),
+        plot_temporary_service_analysis(served_assignments, people, figures_dir),
+    ]
+    print(f"analysis tables -> {workbook.resolve()}")
+    for figure in figures:
+        print(f"analysis figure -> {figure.resolve()}")
+    return workbook, figures
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Q3 time-window route-pool and fleet scheduling solver (Python 3.11)"
@@ -1603,6 +2197,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--routes-out", type=Path, default=ROUTES_OUT)
     parser.add_argument("--assign-out", type=Path, default=ASSIGN_OUT)
     parser.add_argument("--summary-out", type=Path, default=SUMMARY_OUT)
+    parser.add_argument("--figures-dir", type=Path, default=FIGURES_DIR)
+    parser.add_argument("--tables-dir", type=Path, default=TABLES_DIR)
+    parser.add_argument(
+        "--report-only", action="store_true",
+        help="仅读取现存JSON和CSV生成图表，不运行优化搜索",
+    )
     parser.add_argument("--time-limit", type=float, default=3600.0)
     parser.add_argument("--stage1-fraction", type=float, default=0.65)
     parser.add_argument("--master-time", type=float, default=120.0)
@@ -1632,6 +2232,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.report_only:
+        generate_reports_from_existing(args)
+        return
     started = time.monotonic()
     total_deadline = started + max(1.0, args.time_limit)
     stage1_fraction = min(0.9, max(0.2, args.stage1_fraction))
@@ -1898,6 +2501,7 @@ def main() -> None:
     args.summary_out.parent.mkdir(parents=True, exist_ok=True)
     with args.summary_out.open("w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
+    generate_reports_from_existing(args)
     print_metrics("\n=== Q3 最终结果 ===", final_metrics, len(pool))
     print(f"临时任务满足率：{final_metrics.temporary_served}/{len(temporary_ids)}")
     print("时间窗、具体飞机、周转、取送、容量、燃油与人员覆盖完整校验通过。")
